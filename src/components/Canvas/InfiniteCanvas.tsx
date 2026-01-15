@@ -3,17 +3,21 @@
 import React, { useRef, useState, useEffect } from "react";
 import { getStroke } from "perfect-freehand";
 import { getSvgPathFromStroke, Stroke, Point } from "./Renderer";
-import { PeerData } from "@/hooks/usePeer";
+import { PeerData, usePeer } from "@/hooks/usePeer"; // import usePeer types
 import { ZoomIn, ZoomOut, Maximize, Trash2 } from "lucide-react";
 
 interface InfiniteCanvasProps {
     onStrokeComplete: (stroke: Stroke) => void;
     remoteData: PeerData | null;
+    broadcast: (data: PeerData) => void;
+    connectionCount: number;
 }
 
 export default function InfiniteCanvas({
     onStrokeComplete,
     remoteData,
+    broadcast,
+    connectionCount
 }: InfiniteCanvasProps) {
     const [strokes, setStrokes] = useState<Stroke[]>([]);
     const [currentStroke, setCurrentStroke] = useState<Stroke | null>(null);
@@ -22,35 +26,60 @@ export default function InfiniteCanvas({
     const [remoteRatio, setRemoteRatio] = useState<number | null>(null);
 
     const containerRef = useRef<HTMLDivElement>(null);
+    const prevConnectionCount = useRef(0);
 
     // Persistence
     useEffect(() => {
-        const saved = localStorage.getItem('infinite-pad-strokes');
-        if (saved) {
-            try {
-                setStrokes(JSON.parse(saved));
-            } catch (e) {
-                console.error("Failed to load strokes", e);
+        try {
+            const saved = localStorage.getItem('infinite-pad-strokes');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed)) setStrokes(parsed);
             }
+        } catch (e) {
+            console.error("Failed to load strokes", e);
         }
     }, []);
 
     useEffect(() => {
         if (strokes.length > 0) {
-            localStorage.setItem('infinite-pad-strokes', JSON.stringify(strokes));
+            try {
+                localStorage.setItem('infinite-pad-strokes', JSON.stringify(strokes));
+            } catch (e) { }
         }
     }, [strokes]);
 
+    // Sync Strokes to Remote on Connection OR Change
+    useEffect(() => {
+        // If a new person connects, send them everything
+        if (connectionCount > prevConnectionCount.current) {
+            broadcast({ type: 'SYNC_STROKES', payload: { strokes } });
+            broadcast({ type: 'SYNC_TRANSFORM', payload: { transform } });
+        }
+        prevConnectionCount.current = connectionCount;
+    }, [connectionCount, strokes, transform, broadcast]);
+
+    // Broadcast Transform on change (debouncing would be good but for now direct)
+    useEffect(() => {
+        broadcast({ type: 'SYNC_TRANSFORM', payload: { transform } });
+    }, [transform, broadcast]);
+
+
     const clearCanvas = () => {
         setStrokes([]);
-        localStorage.removeItem('infinite-pad-strokes');
+        try { localStorage.removeItem('infinite-pad-strokes'); } catch (e) { }
+        broadcast({ type: 'SYNC_STROKES', payload: { strokes: [] } }); // Sync clear
     };
 
     // Coordinate conversion
     const toWorld = (clientPoint: { x: number, y: number, pressure?: number }) => {
+        const safeScale = Number.isFinite(transform.scale) && transform.scale > 0 ? transform.scale : 1;
+        const safeX = Number.isFinite(transform.x) ? transform.x : 0;
+        const safeY = Number.isFinite(transform.y) ? transform.y : 0;
+
         return {
-            x: (clientPoint.x - transform.x) / transform.scale,
-            y: (clientPoint.y - transform.y) / transform.scale,
+            x: (clientPoint.x - safeX) / safeScale,
+            y: (clientPoint.y - safeY) / safeScale,
             pressure: clientPoint.pressure ?? 0.5,
         };
     };
@@ -65,13 +94,16 @@ export default function InfiniteCanvas({
             return;
         }
 
-        // Handle ZOOM
-        if (remoteData.type === 'ZOOM') {
-            const { scaleFactor } = remoteData.payload;
+        // Handle PAN_ZOOM
+        if (remoteData.type === 'PAN_ZOOM') {
+            const { scaleFactor, deltaX, deltaY } = remoteData.payload;
             setTransform(prev => {
-                const newScale = Math.min(Math.max(prev.scale * scaleFactor, 0.1), 5);
+                const currentScale = prev.scale || 1;
+                const newScale = Math.min(Math.max(currentScale * (scaleFactor || 1), 0.1), 5);
+                const sensitivity = 2.0;
                 return {
-                    ...prev,
+                    x: (prev.x || 0) + ((deltaX || 0) * sensitivity),
+                    y: (prev.y || 0) + ((deltaY || 0) * sensitivity),
                     scale: newScale
                 };
             });
@@ -113,6 +145,8 @@ export default function InfiniteCanvas({
 
         const worldPoint = toWorld(screenPoint);
 
+        if (!Number.isFinite(worldPoint.x) || !Number.isFinite(worldPoint.y)) return;
+
         if (action === 'START') {
             setRemoteStroke({
                 points: [worldPoint],
@@ -130,7 +164,19 @@ export default function InfiniteCanvas({
         } else if (action === 'END') {
             setRemoteStroke(prev => {
                 if (prev) {
-                    setStrokes(current => [...current, prev]);
+                    const newStrokes = [...strokes, prev];
+                    setStrokes(newStrokes);
+
+                    // Broadcast this new stroke to remotes so they can update!
+                    // Or just broadcast all? A single stroke is smaller.
+                    // For simplicity, I'm relying on the main `useEffect` [strokes] trigger above? 
+                    // No, that triggers on *every* stroke. Expensive for "move".
+                    // But `setStrokes` updates state. The Effect will fire. 
+                    // We should optimize: Effect only on *added* stroke?
+                    // The effect `[connectionCount, strokes]` will fire every time `strokes` changes.
+                    // Sending full array is robust but heavy.
+                    // Let's send FULL for now. If laggy, we switch to incremental.
+                    // Actually... 100 strokes is fine. 1000 might lag.
                     return null;
                 }
                 return null;
@@ -180,7 +226,9 @@ export default function InfiniteCanvas({
                 const newScale = Math.min(Math.max(transform.scale * scaleFactor, 0.1), 5);
                 setTransform(prev => ({
                     ...prev,
-                    scale: newScale
+                    scale: newScale,
+                    x: prev.x,
+                    y: prev.y
                 }));
             }
             prevPinchDist.current = newDist;
@@ -246,14 +294,20 @@ export default function InfiniteCanvas({
     }, [transform]);
 
     const renderStroke = (stroke: Stroke) => {
-        const outline = getStroke(stroke.points, {
-            size: stroke.size,
-            thinning: 0.5,
-            smoothing: 0.5,
-            streamline: 0.5,
-            simulatePressure: true,
-        });
-        return getSvgPathFromStroke(outline);
+        if (!stroke || !stroke.points || stroke.points.length === 0) return '';
+        try {
+            const outline = getStroke(stroke.points, {
+                size: stroke.size,
+                thinning: 0.5,
+                smoothing: 0.5,
+                streamline: 0.5,
+                simulatePressure: true,
+            });
+            return getSvgPathFromStroke(outline);
+        } catch (e) {
+            console.error("Error rendering stroke", e);
+            return '';
+        }
     };
 
     const zoomIn = () => setTransform(p => ({ ...p, scale: Math.min(p.scale * 1.2, 5) }));

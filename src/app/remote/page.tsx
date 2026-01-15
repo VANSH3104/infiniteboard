@@ -1,19 +1,21 @@
 "use client";
 
 import React, { useEffect, useState, useRef, Suspense } from "react";
-import { usePeer } from "@/hooks/usePeer";
+import { usePeer, PeerData } from "@/hooks/usePeer";
 import { useSearchParams } from "next/navigation";
 import { Edit2, Eraser, Loader2, Trash2 } from "lucide-react";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { getStroke } from "perfect-freehand";
+import { getSvgPathFromStroke } from "@/components/Canvas/Renderer";
 
 function cn(...inputs: (string | undefined | null | false)[]) {
     return twMerge(clsx(inputs));
 }
 
 const COLORS = [
-    { name: "White", value: "#ffffff" },
     { name: "Black", value: "#000000" },
+    { name: "White", value: "#ffffff" },
     { name: "Red", value: "#ef4444" },
     { name: "Blue", value: "#3b82f6" },
     { name: "Green", value: "#22c55e" },
@@ -24,15 +26,20 @@ const COLORS = [
 function RemoteContent() {
     const searchParams = useSearchParams();
     const hostId = searchParams.get("hostId");
-    const { connectToHost, sendData, isConnected, isReady } = usePeer();
+    const { connectToHost, sendData, isConnected, isReady, setOnData } = usePeer();
+
     const [activeTool, setActiveTool] = useState<'PEN' | 'ERASER'>('PEN');
-    const [activeColor, setActiveColor] = useState<string>(COLORS[1].value); // Default to Black
+    const [activeColor, setActiveColor] = useState<string>(COLORS[0].value);
     const [trail, setTrail] = useState<{ x: number, y: number }[]>([]);
 
-    const padRef = useRef<HTMLDivElement>(null);
+    // Mirroring Sate
+    const [mirroredStrokes, setMirroredStrokes] = useState<any[]>([]);
+    const [hostTransform, setHostTransform] = useState({ x: 0, y: 0, scale: 1 });
 
+    const padRef = useRef<HTMLDivElement>(null);
     const pointers = useRef<Map<number, { x: number, y: number }>>(new Map());
     const prevPinchDist = useRef<number | null>(null);
+    const prevCentroid = useRef<{ x: number, y: number } | null>(null);
     const isZooming = useRef(false);
 
     useEffect(() => {
@@ -40,6 +47,24 @@ function RemoteContent() {
             connectToHost(hostId);
         }
     }, [hostId, isReady, connectToHost]);
+
+    // Listen for Sync Data
+    useEffect(() => {
+        setOnData((data: PeerData) => {
+            if (data.type === 'SYNC_STROKES') {
+                // Replace all strokes (heavy but robust)
+                // Optimization: If payload has ONE stroke, append. If array, replace.
+                // But for now we just implemented full array in Host.
+                if (Array.isArray(data.payload.strokes)) {
+                    setMirroredStrokes(data.payload.strokes);
+                }
+            }
+            if (data.type === 'SYNC_TRANSFORM') {
+                setHostTransform(data.payload.transform);
+            }
+        });
+    }, [setOnData]);
+
 
     // -------- INPUT HANDLING --------
     const sendStrokeEvent = (action: 'START' | 'MOVE' | 'END', e: React.PointerEvent) => {
@@ -76,12 +101,11 @@ function RemoteContent() {
         e.preventDefault();
         pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-        // Check for Pinch Start
         if (pointers.current.size === 2) {
             isZooming.current = true;
             const pts = Array.from(pointers.current.values());
             prevPinchDist.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-
+            prevCentroid.current = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
             setTrail([]);
             sendData({ type: 'STROKE', payload: { action: 'END', tool: activeTool } });
             return;
@@ -98,16 +122,23 @@ function RemoteContent() {
         pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
         if (pointers.current.size === 2) {
+            // Handle Pinch & Pan
             const pts = Array.from(pointers.current.values());
             const newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            const newCentroid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
 
-            if (prevPinchDist.current) {
-                const scaleFactor = newDist / prevPinchDist.current;
+            if (prevPinchDist.current && prevCentroid.current) {
+                const scaleFactor = newDist / (prevPinchDist.current || 1);
+                const deltaX = newCentroid.x - prevCentroid.current.x;
+                const deltaY = newCentroid.y - prevCentroid.current.y;
+
                 sendData({
-                    type: 'ZOOM',
-                    payload: { scaleFactor }
+                    type: 'PAN_ZOOM',
+                    payload: { scaleFactor, deltaX, deltaY }
                 });
+
                 prevPinchDist.current = newDist;
+                prevCentroid.current = newCentroid;
             }
             return;
         }
@@ -121,14 +152,13 @@ function RemoteContent() {
     const handlePointerUp = (e: React.PointerEvent) => {
         e.preventDefault();
         pointers.current.delete(e.pointerId);
-
         if (pointers.current.size < 2) {
             prevPinchDist.current = null;
+            prevCentroid.current = null;
             if (pointers.current.size === 0) {
                 isZooming.current = false;
             }
         }
-
         if (!isZooming.current) {
             sendStrokeEvent('END', e);
             setTrail([]);
@@ -136,7 +166,7 @@ function RemoteContent() {
     };
 
     const handleClearCanvas = () => {
-        if (window.confirm("Are you sure you want to clear the entire canvas?")) {
+        if (window.confirm("Clear Canvas?")) {
             sendData({ type: 'CLEAR', payload: {} });
         }
     };
@@ -151,50 +181,66 @@ function RemoteContent() {
         };
     }, []);
 
-    if (!hostId) {
-        return (
-            <div className="flex items-center justify-center h-screen bg-neutral-900 text-white p-6 text-center">
-                <p>No Host ID found. Please scan the QR code again.</p>
-            </div>
-        );
-    }
+    const renderMirroredStroke = (stroke: any) => {
+        if (!stroke.points) return '';
+        const outline = getStroke(stroke.points, {
+            size: stroke.size,
+            thinning: 0.5,
+            smoothing: 0.5,
+            streamline: 0.5,
+            simulatePressure: true,
+        });
+        return getSvgPathFromStroke(outline);
+    };
+
+    if (!hostId) return <div className="flex items-center justify-center h-screen bg-black text-white">No ID</div>;
 
     return (
-        <div className="fixed inset-0 bg-neutral-950 text-white flex flex-col select-none overscroll-none">
-            {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-neutral-800 bg-neutral-900/50 backdrop-blur-md z-10">
-                <div className="flex items-center gap-2">
-                    <div className={cn("w-2 h-2 rounded-full", isConnected ? "bg-green-500 shadow-[0_0_10px_#22c55e]" : "bg-red-500 animate-pulse")} />
-                    <span className="text-xs font-mono text-neutral-400">
-                        {isConnected ? "CONNECTED" : "CONNECTING..."}
-                    </span>
-                </div>
-                {!isConnected && <Loader2 className="animate-spin text-neutral-600" size={16} />}
-                <div className="text-xs text-neutral-600 font-mono">ID: {hostId.slice(0, 4)}...</div>
+        <div className="fixed inset-0 bg-neutral-950 text-white flex flex-col select-none overscroll-none overflow-hidden">
+            {/* Maximize Area: Remove Header, put minimal status overlay */}
+            <div className="absolute top-2 left-2 z-20 flex items-center gap-2 bg-neutral-900/40 backdrop-blur rounded-full px-3 py-1 pointer-events-none">
+                <div className={cn("w-2 h-2 rounded-full", isConnected ? "bg-green-500" : "bg-red-500")} />
+                <span className="text-[10px] text-neutral-400 font-mono">{isConnected ? "ONLINE" : "OFFLINE"}</span>
             </div>
 
             {/* Touch Surface */}
             <div
                 ref={padRef}
-                className="flex-1 w-full bg-neutral-900 relative touch-none cursor-none overflow-hidden"
+                className="flex-1 w-full relative touch-none cursor-none overflow-hidden bg-neutral-900"
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerCancel={handlePointerUp}
                 onPointerLeave={handlePointerUp}
             >
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-5">
-                    <div className="grid grid-cols-6 grid-rows-6 w-full h-full">
-                        {[...Array(36)].map((_, i) => (
-                            <div key={i} className="border border-white/20" />
-                        ))}
+                {/* Mirrored Canvas Layer */}
+                <div className="absolute inset-0 pointer-events-none opacity-50">
+                    {/* 
+                We try to mimic Host Transform. 
+                But Host Transform is purely screen pixels on Host.
+                We need to map it to Phone pixels.
+                Approximation: Scale down by 0.5?
+                Better: Just render. The user will Pan/Zoom to see what they want.
+             */}
+                    <div
+                        style={{
+                            transform: `translate(${hostTransform.x}px, ${hostTransform.y}px) scale(${hostTransform.scale})`,
+                            transformOrigin: '0 0',
+                            width: '100%',
+                            height: '100%'
+                        }}
+                    >
+                        <svg className="overflow-visible w-[5000px] h-[5000px]"> {/* Big container */}
+                            {mirroredStrokes.map((s, i) => (
+                                <path key={i} d={renderMirroredStroke(s)} fill={s.color} />
+                            ))}
+                        </svg>
                     </div>
                 </div>
 
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <span className="text-neutral-800 font-bold text-4xl tracking-widest opacity-20 transform -rotate-12">
-                        PAD AREA
-                    </span>
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-10">
+                    {/* Minimal grid */}
+                    <div className="w-1 h-1 bg-white rounded-full mx-auto" />
                 </div>
 
                 <svg className="absolute inset-0 w-full h-full pointer-events-none">
@@ -205,67 +251,48 @@ function RemoteContent() {
                         strokeWidth="4"
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        opacity={0.8}
                     />
                 </svg>
             </div>
 
-            {/* Toolbar */}
-            <div className="bg-neutral-900 border-t border-neutral-800 z-10 w-full flex flex-col pb-safe">
+            {/* Minimal Toolbar Overlay */}
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-neutral-800/90 backdrop-blur border border-neutral-700 p-2 rounded-3xl shadow-2xl z-30 pb-safe">
+                <button
+                    onClick={() => setActiveTool('PEN')}
+                    className={cn("p-3 rounded-full transition-all", activeTool === 'PEN' ? "bg-indigo-500 text-white shadow-lg" : "text-neutral-400")}
+                >
+                    <Edit2 size={20} />
+                </button>
 
-                {/* Color Palette */}
+                {/* Colors (only show if Pen is active, simplified) */}
                 {activeTool === 'PEN' && (
-                    <div className="flex items-center gap-3 p-4 overflow-x-auto no-scrollbar justify-center">
-                        {COLORS.map((c) => (
+                    <div className="flex gap-2 px-2 overflow-x-auto max-w-[150px] no-scrollbar">
+                        {COLORS.slice(0, 5).map(c => (
                             <button
                                 key={c.name}
                                 onClick={() => setActiveColor(c.value)}
-                                className={cn(
-                                    "w-8 h-8 rounded-full border-2 transition-all shrink-0",
-                                    activeColor === c.value ? "border-white scale-110" : "border-transparent"
-                                )}
+                                className={cn("w-6 h-6 rounded-full border-2 shrink-0", activeColor === c.value ? "border-white" : "border-transparent")}
                                 style={{ backgroundColor: c.value }}
                             />
                         ))}
                     </div>
                 )}
 
-                {/* Tools */}
-                <div className="flex items-center justify-center gap-4 p-4 pb-8 border-t border-neutral-800">
-                    <button
-                        onClick={() => setActiveTool('PEN')}
-                        className={cn(
-                            "flex flex-col items-center gap-2 transition-all p-3 rounded-2xl w-20",
-                            activeTool === 'PEN'
-                                ? "bg-neutral-800 text-white"
-                                : "text-neutral-500"
-                        )}
-                    >
-                        <Edit2 size={20} className={activeTool === 'PEN' ? "text-indigo-400" : ""} />
-                        <span className="text-[10px] font-medium uppercase tracking-wider">Pen</span>
-                    </button>
+                <button
+                    onClick={() => setActiveTool('ERASER')}
+                    className={cn("p-3 rounded-full transition-all", activeTool === 'ERASER' ? "bg-rose-500 text-white shadow-lg" : "text-neutral-400")}
+                >
+                    <Eraser size={20} />
+                </button>
 
-                    <button
-                        onClick={() => setActiveTool('ERASER')}
-                        className={cn(
-                            "flex flex-col items-center gap-2 transition-all p-3 rounded-2xl w-20",
-                            activeTool === 'ERASER'
-                                ? "bg-neutral-800 text-white"
-                                : "text-neutral-500"
-                        )}
-                    >
-                        <Eraser size={20} className={activeTool === 'ERASER' ? "text-rose-400" : ""} />
-                        <span className="text-[10px] font-medium uppercase tracking-wider">Eraser</span>
-                    </button>
+                <div className="w-px h-6 bg-neutral-700 mx-1" />
 
-                    <button
-                        onClick={handleClearCanvas}
-                        className="flex flex-col items-center gap-2 transition-all p-3 rounded-2xl w-20 text-neutral-500 active:text-red-500 hover:bg-neutral-800"
-                    >
-                        <Trash2 size={20} />
-                        <span className="text-[10px] font-medium uppercase tracking-wider">Clear</span>
-                    </button>
-                </div>
+                <button
+                    onClick={handleClearCanvas}
+                    className="p-3 rounded-full text-neutral-400 hover:text-red-400 hover:bg-red-900/30 transition-all"
+                >
+                    <Trash2 size={20} />
+                </button>
             </div>
         </div>
     );
@@ -273,7 +300,7 @@ function RemoteContent() {
 
 export default function RemotePage() {
     return (
-        <Suspense fallback={<div className="flex h-screen w-full items-center justify-center bg-neutral-950 text-white">Loading...</div>}>
+        <Suspense fallback={<div className="flex h-screen items-center justify-center bg-black text-white">Loading...</div>}>
             <RemoteContent />
         </Suspense>
     );
