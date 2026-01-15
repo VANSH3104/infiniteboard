@@ -157,7 +157,9 @@ function RemoteContent() {
                 const deltaX = newCentroid.x - prevCentroid.current.x;
                 const deltaY = newCentroid.y - prevCentroid.current.y;
 
-                if (Math.abs(deltaX) > 0.5 || Math.abs(deltaY) > 0.5 || Math.abs(scaleFactor - 1) > 0.01) {
+                if (Math.abs(scaleFactor - 1) < 0.03) scaleFactor = 1; // Deadzone to prevent jittery zoom when panning
+
+                if (Math.abs(deltaX) > 0.5 || Math.abs(deltaY) > 0.5 || Math.abs(scaleFactor - 1) > 0.001) {
                     sendData({
                         type: 'PAN_ZOOM',
                         payload: { scaleFactor, deltaX, deltaY }
