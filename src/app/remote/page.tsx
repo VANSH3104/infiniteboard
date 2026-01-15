@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, Suspense } from "react";
 import { usePeer } from "@/hooks/usePeer";
 import { useSearchParams } from "next/navigation";
 import { Edit2, Eraser, Loader2 } from "lucide-react";
@@ -20,7 +20,7 @@ const COLORS = [
     { name: "Orange", value: "#f97316" },
 ];
 
-export default function RemotePage() {
+function RemoteContent() {
     const searchParams = useSearchParams();
     const hostId = searchParams.get("hostId");
     const { connectToHost, sendData, isConnected } = usePeer();
@@ -200,5 +200,13 @@ export default function RemotePage() {
                 </div>
             </div>
         </div>
+    );
+}
+
+export default function RemotePage() {
+    return (
+        <Suspense fallback={<div className="flex h-screen w-full items-center justify-center bg-neutral-950 text-white">Loading...</div>}>
+            <RemoteContent />
+        </Suspense>
     );
 }

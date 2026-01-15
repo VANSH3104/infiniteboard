@@ -16,6 +16,9 @@ export const usePeer = () => {
 
   useEffect(() => {
     // Initialize PeerJS (auto-generates ID)
+    // We are ensuring this only runs on client side
+    if (typeof window === 'undefined') return;
+
     const peer = new Peer();
     peerRef.current = peer;
 
@@ -26,7 +29,7 @@ export const usePeer = () => {
 
     peer.on('connection', (conn) => {
       console.log('Incoming connection from:', conn.peer);
-      
+
       conn.on('open', () => {
         setConnections((prev) => [...prev, conn]);
       });
@@ -40,6 +43,10 @@ export const usePeer = () => {
       conn.on('close', () => {
         setConnections((prev) => prev.filter((c) => c !== conn));
       });
+
+      conn.on('error', (err) => {
+        console.error('Connection error:', err);
+      });
     });
 
     return () => {
@@ -50,15 +57,19 @@ export const usePeer = () => {
   const connectToHost = (hostId: string) => {
     if (!peerRef.current) return;
     const conn = peerRef.current.connect(hostId);
-    
+
     conn.on('open', () => {
       console.log('Connected to host:', hostId);
       setConnections((prev) => [...prev, conn]);
     });
 
     conn.on('close', () => {
-        console.log('Disconnected from host');
-         setConnections((prev) => prev.filter((c) => c !== conn));
+      console.log('Disconnected from host');
+      setConnections((prev) => prev.filter((c) => c !== conn));
+    });
+
+    conn.on('error', (err) => {
+      console.error('Connection error:', err);
     });
   };
 
@@ -74,5 +85,5 @@ export const usePeer = () => {
     onDataRef.current = callback;
   };
 
-  return { peerId, connectToHost, sendData, setOnData, isConnected: connections.length > 0 };
+  return { peerId, connections, connectToHost, sendData, setOnData, isConnected: connections.length > 0 };
 };

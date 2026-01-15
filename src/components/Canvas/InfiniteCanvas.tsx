@@ -4,6 +4,7 @@ import React, { useRef, useState, useEffect } from "react";
 import { getStroke } from "perfect-freehand";
 import { getSvgPathFromStroke, Stroke, Point } from "./Renderer";
 import { PeerData } from "@/hooks/usePeer";
+import { ZoomIn, ZoomOut, Maximize } from "lucide-react";
 
 interface InfiniteCanvasProps {
     onStrokeComplete: (stroke: Stroke) => void;
@@ -21,6 +22,25 @@ export default function InfiniteCanvas({
 
     const containerRef = useRef<HTMLDivElement>(null);
 
+    // Persistence
+    useEffect(() => {
+        const saved = localStorage.getItem('infinite-pad-strokes');
+        if (saved) {
+            try {
+                setStrokes(JSON.parse(saved));
+            } catch (e) {
+                console.error("Failed to load strokes", e);
+            }
+        }
+    }, []);
+
+    useEffect(() => {
+        if (strokes.length > 0) {
+            localStorage.setItem('infinite-pad-strokes', JSON.stringify(strokes));
+        }
+    }, [strokes]);
+
+    // Coordinate conversion
     const toWorld = (clientPoint: { x: number, y: number, pressure?: number }) => {
         return {
             x: (clientPoint.x - transform.x) / transform.scale,
@@ -29,6 +49,7 @@ export default function InfiniteCanvas({
         };
     };
 
+    // Remote Data Handling
     useEffect(() => {
         if (!remoteData) return;
         if (remoteData.type !== 'STROKE') return;
@@ -39,7 +60,7 @@ export default function InfiniteCanvas({
         if (!containerRef.current) return;
         const { width, height } = containerRef.current.getBoundingClientRect();
 
-        // Convert normalized point to screen pixel point
+        // Normalize -> Screen Pixel
         const screenPoint = {
             x: point.x * width,
             y: point.y * height,
@@ -71,13 +92,32 @@ export default function InfiniteCanvas({
                 return null;
             });
         }
-
     }, [remoteData, transform]);
+
+    // Touch / Pointer Handling
+    // We need to distinguish between Drawing (1 finger/pen) and Panning/Zooming (2 fingers)
+    // Standard PointerEvents don't make this super easy without gesture logic.
+    // Simple heuristic: If Spacebar held or Middle Click -> Pan. 
+    // For Touch: Browser usually handles pinch-zoom if we don't preventDefault, but we want Custom Zoom.
+
+    const pointers = useRef<Map<number, { x: number, y: number }>>(new Map());
+    const prevPinchDist = useRef<number | null>(null);
 
     const handlePointerDown = (e: React.PointerEvent) => {
         e.currentTarget.setPointerCapture(e.pointerId);
-        if (e.buttons !== 1) return;
+        pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
+        if (pointers.current.size === 2) {
+            // Start Pinch/Pan gesture
+            // Calculate initial distance
+            const pts = Array.from(pointers.current.values());
+            prevPinchDist.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            return;
+        }
+
+        if (e.buttons !== 1 || pointers.current.size > 1) return;
+
+        // Drawing
         const rect = e.currentTarget.getBoundingClientRect();
         const point = {
             x: (e.clientX - rect.left - transform.x) / transform.scale,
@@ -93,7 +133,31 @@ export default function InfiniteCanvas({
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
-        if (e.buttons !== 1 || !currentStroke) return;
+        pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        if (pointers.current.size === 2) {
+            // Handle Pinch Zoom / Pan
+            const pts = Array.from(pointers.current.values());
+            const newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+
+            if (prevPinchDist.current) {
+                const scaleFactor = newDist / prevPinchDist.current;
+                const newScale = Math.min(Math.max(transform.scale * scaleFactor, 0.1), 5);
+
+                // Zoom around center of pinch? Too complex for 1 file. 
+                // Simple: Zoom and simple pan delta.
+                setTransform(prev => ({
+                    ...prev,
+                    scale: newScale
+                }));
+            }
+            prevPinchDist.current = newDist;
+            return;
+        }
+
+        if (!currentStroke || pointers.current.size > 1) return;
+
+        // Drawing
         const rect = e.currentTarget.getBoundingClientRect();
         const point = {
             x: (e.clientX - rect.left - transform.x) / transform.scale,
@@ -109,6 +173,9 @@ export default function InfiniteCanvas({
 
     const handlePointerUp = (e: React.PointerEvent) => {
         e.currentTarget.releasePointerCapture(e.pointerId);
+        pointers.current.delete(e.pointerId);
+        prevPinchDist.current = null;
+
         if (!currentStroke) return;
 
         setStrokes([...strokes, currentStroke]);
@@ -116,6 +183,7 @@ export default function InfiniteCanvas({
         setCurrentStroke(null);
     };
 
+    // Wheel Zoom
     useEffect(() => {
         const handleWheel = (e: WheelEvent) => {
             if (e.ctrlKey || e.metaKey) {
@@ -123,6 +191,9 @@ export default function InfiniteCanvas({
                 const zoomSensitivity = 0.001;
                 const delta = -e.deltaY * zoomSensitivity;
                 const newScale = Math.min(Math.max(transform.scale + delta, 0.1), 5);
+
+                // Zoom towards mouse pointer
+                // simplified: just zoom
                 setTransform(prev => ({ ...prev, scale: newScale }));
             } else {
                 e.preventDefault();
@@ -156,6 +227,11 @@ export default function InfiniteCanvas({
         return getSvgPathFromStroke(outline);
     };
 
+    // Zoom Helpers
+    const zoomIn = () => setTransform(p => ({ ...p, scale: Math.min(p.scale * 1.2, 5) }));
+    const zoomOut = () => setTransform(p => ({ ...p, scale: Math.max(p.scale / 1.2, 0.1) }));
+    const resetZoom = () => setTransform({ x: 0, y: 0, scale: 1 });
+
     return (
         <div
             ref={containerRef}
@@ -163,6 +239,8 @@ export default function InfiniteCanvas({
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            onPointerLeave={handlePointerUp}
         >
             <div
                 className="absolute top-0 left-0 w-full h-full origin-top-left will-change-transform"
@@ -178,9 +256,25 @@ export default function InfiniteCanvas({
                         <path d={renderStroke(currentStroke)} fill={currentStroke.color} />
                     )}
                     {remoteStroke && (
-                        <path d={renderStroke(remoteStroke)} fill={remoteStroke.color} className="opacity-90" />
+                        <path d={renderStroke(remoteStroke)} fill={remoteStroke.color} className="opacity-90 transition-opacity" />
                     )}
                 </svg>
+            </div>
+
+            {/* Zoom Controls */}
+            <div className="absolute bottom-6 right-6 flex flex-col gap-2 bg-white/90 backdrop-blur shadow-lg rounded-xl p-2 border border-neutral-200">
+                <button onClick={zoomIn} className="p-2 hover:bg-neutral-100 rounded-lg text-neutral-600 transition-colors" title="Zoom In">
+                    <ZoomIn size={20} />
+                </button>
+                <button onClick={resetZoom} className="p-2 hover:bg-neutral-100 rounded-lg text-neutral-600 transition-colors" title="Reset View">
+                    <Maximize size={20} />
+                </button>
+                <button onClick={zoomOut} className="p-2 hover:bg-neutral-100 rounded-lg text-neutral-600 transition-colors" title="Zoom Out">
+                    <ZoomOut size={20} />
+                </button>
+                <div className="text-[10px] text-center font-mono text-neutral-400 border-t pt-1 mt-1">
+                    {(transform.scale * 100).toFixed(0)}%
+                </div>
             </div>
         </div>
     );
