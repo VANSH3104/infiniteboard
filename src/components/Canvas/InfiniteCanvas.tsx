@@ -124,7 +124,7 @@ export default function InfiniteCanvas({
             setTransform(prev => {
                 const currentScale = prev.scale || 1;
                 const newScale = Math.min(Math.max(currentScale * (scaleFactor || 1), 0.1), 5);
-                const sensitivity = 2.0;
+                const sensitivity = 3.5;
                 return {
                     x: (prev.x || 0) + ((deltaX || 0) * sensitivity),
                     y: (prev.y || 0) + ((deltaY || 0) * sensitivity),
