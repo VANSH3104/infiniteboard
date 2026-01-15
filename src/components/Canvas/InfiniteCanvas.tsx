@@ -229,13 +229,24 @@ export default function InfiniteCanvas({
             const newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
 
             if (prevPinchDist.current) {
+                // Calculate Center of Pinch
+                const midX = (pts[0].x + pts[1].x) / 2;
+                const midY = (pts[0].y + pts[1].y) / 2;
+
+                const rect = e.currentTarget.getBoundingClientRect();
+                const containerX = midX - rect.left;
+                const containerY = midY - rect.top;
+
                 const scaleFactor = newDist / prevPinchDist.current;
                 const newScale = Math.min(Math.max(transform.scale * scaleFactor, 0.1), 5);
+
+                // Effective zoom ratio
+                const ratio = newScale / transform.scale;
+
                 setTransform(prev => ({
-                    ...prev,
                     scale: newScale,
-                    x: prev.x,
-                    y: prev.y
+                    x: containerX - ratio * (containerX - prev.x),
+                    y: containerY - ratio * (containerY - prev.y)
                 }));
             }
             prevPinchDist.current = newDist;
@@ -320,8 +331,33 @@ export default function InfiniteCanvas({
         }
     };
 
-    const zoomIn = () => setTransform(p => ({ ...p, scale: Math.min(p.scale * 1.2, 5) }));
-    const zoomOut = () => setTransform(p => ({ ...p, scale: Math.max(p.scale / 1.2, 0.1) }));
+    const zoomIn = () => {
+        setTransform(prev => {
+            const newScale = Math.min(prev.scale * 1.2, 5);
+            const ratio = newScale / prev.scale;
+            const cx = dimensions.width / 2;
+            const cy = dimensions.height / 2;
+            return {
+                scale: newScale,
+                x: cx - ratio * (cx - prev.x),
+                y: cy - ratio * (cy - prev.y)
+            };
+        });
+    };
+
+    const zoomOut = () => {
+        setTransform(prev => {
+            const newScale = Math.max(prev.scale / 1.2, 0.1);
+            const ratio = newScale / prev.scale;
+            const cx = dimensions.width / 2;
+            const cy = dimensions.height / 2;
+            return {
+                scale: newScale,
+                x: cx - ratio * (cx - prev.x),
+                y: cy - ratio * (cy - prev.y)
+            };
+        });
+    };
     const resetZoom = () => setTransform({ x: 0, y: 0, scale: 1 });
 
     return (
@@ -353,7 +389,10 @@ export default function InfiniteCanvas({
                 </svg>
             </div>
 
-            <div className="absolute bottom-6 right-6 flex flex-col gap-2 bg-white/90 backdrop-blur shadow-lg rounded-xl p-2 border border-neutral-200">
+            <div
+                onPointerDown={(e) => e.stopPropagation()}
+                className="absolute bottom-6 right-6 flex flex-col gap-2 bg-white/90 backdrop-blur shadow-lg rounded-xl p-2 border border-neutral-200"
+            >
                 <button onClick={zoomIn} className="p-2 hover:bg-neutral-100 rounded-lg text-neutral-600 transition-colors" title="Zoom In">
                     <ZoomIn size={20} />
                 </button>

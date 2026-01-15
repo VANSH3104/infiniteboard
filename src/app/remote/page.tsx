@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef, Suspense } from "react";
 import { usePeer, PeerData } from "@/hooks/usePeer";
 import { useSearchParams } from "next/navigation";
-import { Edit2, Eraser, Loader2, Trash2, Move } from "lucide-react";
+import { Edit2, Eraser, Loader2, Trash2 } from "lucide-react";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { getStroke } from "perfect-freehand";
@@ -15,7 +15,7 @@ function cn(...inputs: (string | undefined | null | false)[]) {
 
 const COLORS = [
     { name: "Black", value: "#000000" },
-    { name: "White", value: "#ffffff" },
+    { name: "White", value: "#49c1c3ff" },
     { name: "Red", value: "#ef4444" },
     { name: "Blue", value: "#3b82f6" },
     { name: "Green", value: "#22c55e" },
@@ -23,96 +23,7 @@ const COLORS = [
     { name: "Orange", value: "#f97316" },
 ];
 
-const Joystick = ({ onPan }: { onPan: (dx: number, dy: number) => void }) => {
-    const stickRef = useRef<HTMLDivElement>(null);
-    const active = useRef(false);
-    const [pos, setPos] = useState({ x: 0, y: 0 });
-    const startPos = useRef({ x: 0, y: 0 });
-    const animationFrame = useRef<number>(0);
 
-    const handleStart = (e: React.PointerEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        active.current = true;
-        stickRef.current?.setPointerCapture(e.pointerId);
-        startPos.current = { x: e.clientX, y: e.clientY };
-
-        loop();
-    };
-
-    const loop = () => {
-        // Warning: this loop might be orphaned if component unmounts?
-        // Relying on useEffect/animationFrame is better.
-        // We have a useEffect below that starts the loop.
-    };
-
-    const handleMoveVelocity = (e: React.PointerEvent) => {
-        if (!active.current) return;
-        e.preventDefault();
-        e.stopPropagation();
-
-        const maxDist = 40;
-        const dx = e.clientX - startPos.current.x;
-        const dy = e.clientY - startPos.current.y;
-        const dist = Math.hypot(dx, dy);
-
-        const clampedDist = Math.min(dist, maxDist);
-        const angle = Math.atan2(dy, dx);
-
-        const x = Math.cos(angle) * clampedDist;
-        const y = Math.sin(angle) * clampedDist;
-
-        setPos({ x, y });
-
-        // Normalize vector (-1 to 1)
-        currentVector.current = { x: x / maxDist, y: y / maxDist };
-    };
-
-    const currentVector = useRef({ x: 0, y: 0 });
-
-    useEffect(() => {
-        let frame: number;
-        const run = () => {
-            if (active.current) {
-                // Apply pan based on vector
-                const speed = 15; // px per frame
-                if (Math.abs(currentVector.current.x) > 0.1 || Math.abs(currentVector.current.y) > 0.1) {
-                    onPan(-currentVector.current.x * speed, -currentVector.current.y * speed);
-                }
-            }
-            frame = requestAnimationFrame(run);
-        };
-        run();
-        return () => cancelAnimationFrame(frame);
-    }, [onPan]);
-
-    const handleEnd = (e: React.PointerEvent) => {
-        active.current = false;
-        setPos({ x: 0, y: 0 });
-        currentVector.current = { x: 0, y: 0 };
-    };
-
-    return (
-        <div
-            className="w-24 h-24 rounded-full bg-neutral-800/80 border border-neutral-600 backdrop-blur flex items-center justify-center touch-none shadow-2xl"
-            onPointerDown={handleStart}
-            onPointerMove={handleMoveVelocity}
-            onPointerUp={handleEnd}
-            onPointerCancel={handleEnd}
-        >
-            <div
-                ref={stickRef}
-                className="w-10 h-10 rounded-full bg-indigo-500 shadow-inner"
-                style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }}
-            />
-            {/* Icons for direction hints */}
-            <div className="absolute top-1 left-1/2 -translate-x-1/2 text-neutral-500/50 text-[10px]">▲</div>
-            <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-neutral-500/50 text-[10px]">▼</div>
-            <div className="absolute left-1 top-1/2 -translate-y-1/2 text-neutral-500/50 text-[10px]">◀</div>
-            <div className="absolute right-1 top-1/2 -translate-y-1/2 text-neutral-500/50 text-[10px]">▶</div>
-        </div>
-    );
-};
 
 function RemoteContent() {
     const searchParams = useSearchParams();
@@ -208,12 +119,7 @@ function RemoteContent() {
         }
     };
 
-    const handleJoystickPan = (dx: number, dy: number) => {
-        sendData({
-            type: 'PAN_ZOOM',
-            payload: { scaleFactor: 1, deltaX: dx, deltaY: dy }
-        });
-    };
+
 
     const handleClearCanvas = () => {
         if (window.confirm("Clear Canvas?")) sendData({ type: 'CLEAR', payload: {} });
@@ -281,10 +187,7 @@ function RemoteContent() {
                 </svg>
             </div>
 
-            {/* Joystick - Bottom Right (Portrait) / Top Right (Landscape) */}
-            <div className="absolute bottom-28 right-6 z-30 landscape:top-1/2 landscape:right-6 landscape:bottom-auto landscape:-translate-y-1/2 opacity-70 hover:opacity-100 transition-opacity">
-                <Joystick onPan={handleJoystickPan} />
-            </div>
+
 
             {/* Toolbar - Bottom Center (Portrait) / Left Center (Landscape) */}
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 landscape:bottom-auto landscape:left-6 landscape:top-1/2 landscape:translate-x-0 landscape:-translate-y-1/2 flex landscape:flex-col items-center gap-6 bg-neutral-800/90 backdrop-blur border border-neutral-700 p-3 rounded-full shadow-2xl z-30 pb-safe landscape:pb-3 landscape:pr-safe">
