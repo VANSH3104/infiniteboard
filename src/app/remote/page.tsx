@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef, Suspense } from "react";
 import { usePeer, PeerData } from "@/hooks/usePeer";
 import { useSearchParams } from "next/navigation";
-import { Edit2, Eraser, Loader2, Trash2 } from "lucide-react";
+import { Edit2, Eraser, Loader2, Trash2, Move } from "lucide-react";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { getStroke } from "perfect-freehand";
@@ -28,7 +28,7 @@ function RemoteContent() {
     const hostId = searchParams.get("hostId");
     const { connectToHost, sendData, isConnected, isReady, setOnData } = usePeer();
 
-    const [activeTool, setActiveTool] = useState<'PEN' | 'ERASER'>('PEN');
+    const [activeTool, setActiveTool] = useState<'PEN' | 'ERASER' | 'MOVE'>('PEN');
     const [activeColor, setActiveColor] = useState<string>(COLORS[0].value);
     const [trail, setTrail] = useState<{ x: number, y: number }[]>([]);
 
@@ -52,9 +52,6 @@ function RemoteContent() {
     useEffect(() => {
         setOnData((data: PeerData) => {
             if (data.type === 'SYNC_STROKES') {
-                // Replace all strokes (heavy but robust)
-                // Optimization: If payload has ONE stroke, append. If array, replace.
-                // But for now we just implemented full array in Host.
                 if (Array.isArray(data.payload.strokes)) {
                     setMirroredStrokes(data.payload.strokes);
                 }
@@ -87,7 +84,7 @@ function RemoteContent() {
             payload: {
                 action,
                 point: normalizedPoint,
-                tool: activeTool,
+                tool: activeTool === 'MOVE' ? 'PEN' : activeTool, // Fallback if buggy? No, stroke shouldn't fire if MOVE.
                 color: activeColor,
                 ratio: ratio
             }
@@ -101,13 +98,27 @@ function RemoteContent() {
         e.preventDefault();
         pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-        if (pointers.current.size === 2) {
+        // Multi-touch or Move Tool -> Zoom/Pan Mode
+        if (pointers.current.size === 2 || activeTool === 'MOVE') {
             isZooming.current = true;
+
+            // Setup for Pan/Zoom
             const pts = Array.from(pointers.current.values());
-            prevPinchDist.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-            prevCentroid.current = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+
+            if (pointers.current.size === 2) {
+                prevPinchDist.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+                prevCentroid.current = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+            } else {
+                // Single finger Move
+                prevPinchDist.current = null; // No zoom
+                prevCentroid.current = { x: pts[0].x, y: pts[0].y };
+            }
+
             setTrail([]);
-            sendData({ type: 'STROKE', payload: { action: 'END', tool: activeTool } });
+            // End any stroke if switching modes
+            if (activeTool !== 'MOVE') { // If we were inadvertently drawing
+                sendData({ type: 'STROKE', payload: { action: 'END', tool: activeTool } });
+            }
             return;
         }
 
@@ -121,23 +132,39 @@ function RemoteContent() {
         e.preventDefault();
         pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-        if (pointers.current.size === 2) {
-            // Handle Pinch & Pan
+        // Handle Pan/Zoom
+        if (pointers.current.size === 2 || (activeTool === 'MOVE' && pointers.current.size === 1)) {
             const pts = Array.from(pointers.current.values());
-            const newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-            const newCentroid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
 
-            if (prevPinchDist.current && prevCentroid.current) {
-                const scaleFactor = newDist / (prevPinchDist.current || 1);
+            let newDist = 0;
+            let newCentroid = { x: 0, y: 0 };
+
+            if (pointers.current.size === 2) {
+                newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+                newCentroid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+            } else {
+                newDist = 0; // No zoom
+                newCentroid = { x: pts[0].x, y: pts[0].y };
+            }
+
+            if (prevCentroid.current) {
+                // Calculate Scale
+                let scaleFactor = 1;
+                if (prevPinchDist.current && newDist > 0) {
+                    scaleFactor = newDist / prevPinchDist.current;
+                }
+
                 const deltaX = newCentroid.x - prevCentroid.current.x;
                 const deltaY = newCentroid.y - prevCentroid.current.y;
 
-                sendData({
-                    type: 'PAN_ZOOM',
-                    payload: { scaleFactor, deltaX, deltaY }
-                });
+                if (Math.abs(deltaX) > 0.5 || Math.abs(deltaY) > 0.5 || Math.abs(scaleFactor - 1) > 0.01) {
+                    sendData({
+                        type: 'PAN_ZOOM',
+                        payload: { scaleFactor, deltaX, deltaY }
+                    });
+                }
 
-                prevPinchDist.current = newDist;
+                if (pointers.current.size === 2) prevPinchDist.current = newDist;
                 prevCentroid.current = newCentroid;
             }
             return;
@@ -152,14 +179,29 @@ function RemoteContent() {
     const handlePointerUp = (e: React.PointerEvent) => {
         e.preventDefault();
         pointers.current.delete(e.pointerId);
-        if (pointers.current.size < 2) {
-            prevPinchDist.current = null;
-            prevCentroid.current = null;
+
+        // Reset logic
+        if (activeTool === 'MOVE') {
             if (pointers.current.size === 0) {
+                // End move
+                prevCentroid.current = null;
                 isZooming.current = false;
+            } else {
+                // Reset centroid to remaining finger?
+                const pts = Array.from(pointers.current.values());
+                prevCentroid.current = { x: pts[0].x, y: pts[0].y };
+            }
+        } else {
+            if (pointers.current.size < 2) {
+                prevPinchDist.current = null;
+                prevCentroid.current = null;
+                if (pointers.current.size === 0) {
+                    isZooming.current = false;
+                }
             }
         }
-        if (!isZooming.current) {
+
+        if (!isZooming.current && activeTool !== 'MOVE') {
             sendStrokeEvent('END', e);
             setTrail([]);
         }
@@ -197,7 +239,7 @@ function RemoteContent() {
 
     return (
         <div className="fixed inset-0 bg-neutral-950 text-white flex flex-col select-none overscroll-none overflow-hidden">
-            {/* Maximize Area: Remove Header, put minimal status overlay */}
+            {/* Status Dot */}
             <div className="absolute top-2 left-2 z-20 flex items-center gap-2 bg-neutral-900/40 backdrop-blur rounded-full px-3 py-1 pointer-events-none">
                 <div className={cn("w-2 h-2 rounded-full", isConnected ? "bg-green-500" : "bg-red-500")} />
                 <span className="text-[10px] text-neutral-400 font-mono">{isConnected ? "ONLINE" : "OFFLINE"}</span>
@@ -213,15 +255,7 @@ function RemoteContent() {
                 onPointerCancel={handlePointerUp}
                 onPointerLeave={handlePointerUp}
             >
-                {/* Mirrored Canvas Layer */}
                 <div className="absolute inset-0 pointer-events-none opacity-50">
-                    {/* 
-                We try to mimic Host Transform. 
-                But Host Transform is purely screen pixels on Host.
-                We need to map it to Phone pixels.
-                Approximation: Scale down by 0.5?
-                Better: Just render. The user will Pan/Zoom to see what they want.
-             */}
                     <div
                         style={{
                             transform: `translate(${hostTransform.x}px, ${hostTransform.y}px) scale(${hostTransform.scale})`,
@@ -230,7 +264,7 @@ function RemoteContent() {
                             height: '100%'
                         }}
                     >
-                        <svg className="overflow-visible w-[5000px] h-[5000px]"> {/* Big container */}
+                        <svg className="overflow-visible w-[5000px] h-[5000px]">
                             {mirroredStrokes.map((s, i) => (
                                 <path key={i} d={renderMirroredStroke(s)} fill={s.color} />
                             ))}
@@ -239,7 +273,6 @@ function RemoteContent() {
                 </div>
 
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-10">
-                    {/* Minimal grid */}
                     <div className="w-1 h-1 bg-white rounded-full mx-auto" />
                 </div>
 
@@ -255,8 +288,8 @@ function RemoteContent() {
                 </svg>
             </div>
 
-            {/* Minimal Toolbar Overlay */}
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-neutral-800/90 backdrop-blur border border-neutral-700 p-2 rounded-3xl shadow-2xl z-30 pb-safe">
+            {/* Toolbar */}
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-neutral-800/90 backdrop-blur border border-neutral-700 p-2 rounded-3xl shadow-2xl z-30 pb-safe">
                 <button
                     onClick={() => setActiveTool('PEN')}
                     className={cn("p-3 rounded-full transition-all", activeTool === 'PEN' ? "bg-indigo-500 text-white shadow-lg" : "text-neutral-400")}
@@ -264,9 +297,15 @@ function RemoteContent() {
                     <Edit2 size={20} />
                 </button>
 
-                {/* Colors (only show if Pen is active, simplified) */}
+                <button
+                    onClick={() => setActiveTool('MOVE')}
+                    className={cn("p-3 rounded-full transition-all", activeTool === 'MOVE' ? "bg-blue-500 text-white shadow-lg" : "text-neutral-400")}
+                >
+                    <Move size={20} />
+                </button>
+
                 {activeTool === 'PEN' && (
-                    <div className="flex gap-2 px-2 overflow-x-auto max-w-[150px] no-scrollbar">
+                    <div className="flex gap-2 px-2 overflow-x-auto max-w-[120px] no-scrollbar">
                         {COLORS.slice(0, 5).map(c => (
                             <button
                                 key={c.name}
