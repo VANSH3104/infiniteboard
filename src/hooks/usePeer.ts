@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import Peer, { DataConnection } from 'peerjs';
 
 export type PeerData = {
@@ -9,6 +9,8 @@ export type PeerData = {
 export const usePeer = () => {
   const [peerId, setPeerId] = useState<string>('');
   const [connections, setConnections] = useState<DataConnection[]>([]);
+  const [isReady, setIsReady] = useState(false);
+
   const peerRef = useRef<Peer | null>(null);
   const isPeerCreated = useRef(false);
 
@@ -27,6 +29,7 @@ export const usePeer = () => {
     peer.on('open', (id) => {
       console.log('My Peer ID is: ' + id);
       setPeerId(id);
+      setIsReady(true);
     });
 
     peer.on('connection', (conn) => {
@@ -63,9 +66,13 @@ export const usePeer = () => {
     };
   }, []);
 
-  const connectToHost = (hostId: string) => {
-    if (!peerRef.current) return;
+  const connectToHost = useCallback((hostId: string) => {
+    if (!peerRef.current || !isReady) return;
     if (peerRef.current.id === hostId) return;
+
+    // Check if we already have a connection to this host
+    const existing = connections.find(c => c.peer === hostId);
+    if (existing && existing.open) return;
 
     console.log('Attempting to connect to host:', hostId);
     const conn = peerRef.current.connect(hostId, {
@@ -85,7 +92,7 @@ export const usePeer = () => {
     conn.on('error', (err) => {
       console.error('Connection error:', err);
     });
-  };
+  }, [isReady, connections]);
 
   const sendData = (data: PeerData) => {
     connections.forEach((conn) => {
@@ -101,5 +108,5 @@ export const usePeer = () => {
     onDataRef.current = callback;
   };
 
-  return { peerId, connections, connectToHost, sendData, setOnData, isConnected: connections.length > 0 };
+  return { peerId, isReady, connections, connectToHost, sendData, setOnData, isConnected: connections.length > 0 };
 };

@@ -24,7 +24,7 @@ const COLORS = [
 function RemoteContent() {
     const searchParams = useSearchParams();
     const hostId = searchParams.get("hostId");
-    const { connectToHost, sendData, isConnected } = usePeer();
+    const { connectToHost, sendData, isConnected, isReady } = usePeer();
     const [activeTool, setActiveTool] = useState<'PEN' | 'ERASER'>('PEN');
     const [activeColor, setActiveColor] = useState<string>(COLORS[0].value);
     const [trail, setTrail] = useState<{ x: number, y: number }[]>([]);
@@ -37,13 +37,10 @@ function RemoteContent() {
     const isZooming = useRef(false);
 
     useEffect(() => {
-        if (hostId) {
-            const timer = setTimeout(() => {
-                connectToHost(hostId);
-            }, 1000);
-            return () => clearTimeout(timer);
+        if (hostId && isReady) {
+            connectToHost(hostId);
         }
-    }, [hostId]);
+    }, [hostId, isReady, connectToHost]);
 
     // -------- INPUT HANDLING --------
     const sendStrokeEvent = (action: 'START' | 'MOVE' | 'END', e: React.PointerEvent) => {
@@ -116,8 +113,6 @@ function RemoteContent() {
             return;
         }
 
-        // Only draw if 1 finger and not currently "zooming mode"
-        // (Note: pointers.size check handles active touches, isZooming handles 'was zooming')
         if (e.buttons !== 1 || pointers.current.size > 1 || isZooming.current) return;
 
         const pt = sendStrokeEvent('MOVE', e);
@@ -136,8 +131,6 @@ function RemoteContent() {
             }
         }
 
-        // If we were zooming, don't trigger stroke end logic unless it was a stroke
-        // Actually safe to send END just in case.
         if (!isZooming.current) {
             sendStrokeEvent('END', e);
             setTrail([]);
