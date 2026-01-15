@@ -12,6 +12,7 @@ function cn(...inputs: (string | undefined | null | false)[]) {
 }
 
 const COLORS = [
+    { name: "White", value: "#ffffff" },
     { name: "Black", value: "#000000" },
     { name: "Red", value: "#ef4444" },
     { name: "Blue", value: "#3b82f6" },
@@ -30,6 +31,11 @@ function RemoteContent() {
 
     const padRef = useRef<HTMLDivElement>(null);
 
+    // Multi-touch Zoom Logic
+    const pointers = useRef<Map<number, { x: number, y: number }>>(new Map());
+    const prevPinchDist = useRef<number | null>(null);
+    const isZooming = useRef(false);
+
     useEffect(() => {
         if (hostId) {
             const timer = setTimeout(() => {
@@ -39,7 +45,7 @@ function RemoteContent() {
         }
     }, [hostId]);
 
-    // -------- INPUT HANDLING (NORMALIZED) --------
+    // -------- INPUT HANDLING --------
     const sendStrokeEvent = (action: 'START' | 'MOVE' | 'END', e: React.PointerEvent) => {
         if (!padRef.current) return;
 
@@ -59,7 +65,7 @@ function RemoteContent() {
                 action,
                 point: normalizedPoint,
                 tool: activeTool,
-                color: activeColor // Send selected color
+                color: activeColor
             }
         });
 
@@ -69,21 +75,73 @@ function RemoteContent() {
     const handlePointerDown = (e: React.PointerEvent) => {
         e.currentTarget.setPointerCapture(e.pointerId);
         e.preventDefault();
+        pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        // Check for Pinch Start
+        if (pointers.current.size === 2) {
+            isZooming.current = true;
+            const pts = Array.from(pointers.current.values());
+            prevPinchDist.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+
+            // Cancel any active drawing
+            setTrail([]);
+            sendData({ type: 'STROKE', payload: { action: 'END', tool: activeTool } }); // Force end stroke
+            return;
+        }
+
+        if (pointers.current.size > 1 || isZooming.current) return;
+
         const pt = sendStrokeEvent('START', e);
         if (pt) setTrail([pt]);
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
         e.preventDefault();
-        if (e.buttons !== 1) return;
+        pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        if (pointers.current.size === 2) {
+            // Handle Pinch
+            const pts = Array.from(pointers.current.values());
+            const newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+
+            if (prevPinchDist.current) {
+                const scaleFactor = newDist / prevPinchDist.current;
+                // Send Zoom Event
+                sendData({
+                    type: 'ZOOM',
+                    payload: { scaleFactor }
+                });
+                prevPinchDist.current = newDist;
+            }
+            return;
+        }
+
+        // Only draw if 1 finger and not currently "zooming mode"
+        // (Note: pointers.size check handles active touches, isZooming handles 'was zooming')
+        if (e.buttons !== 1 || pointers.current.size > 1 || isZooming.current) return;
+
         const pt = sendStrokeEvent('MOVE', e);
         if (pt) setTrail(prev => [...prev, pt]);
     };
 
     const handlePointerUp = (e: React.PointerEvent) => {
         e.preventDefault();
-        sendStrokeEvent('END', e);
-        setTrail([]);
+        pointers.current.delete(e.pointerId);
+
+        if (pointers.current.size < 2) {
+            // Reset zoom state if fingers lifted
+            prevPinchDist.current = null;
+            if (pointers.current.size === 0) {
+                isZooming.current = false;
+            }
+        }
+
+        // If we were zooming, don't trigger stroke end logic unless it was a stroke
+        // Actually safe to send END just in case.
+        if (!isZooming.current) {
+            sendStrokeEvent('END', e);
+            setTrail([]);
+        }
     };
 
     useEffect(() => {
@@ -122,6 +180,7 @@ function RemoteContent() {
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerCancel={handlePointerUp}
+                onPointerLeave={handlePointerUp}
             >
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-5">
                     <div className="grid grid-cols-6 grid-rows-6 w-full h-full">
@@ -145,7 +204,7 @@ function RemoteContent() {
                         strokeWidth="4"
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        opacity={0.6}
+                        opacity={0.8}
                     />
                 </svg>
             </div>
@@ -161,7 +220,7 @@ function RemoteContent() {
                                 key={c.name}
                                 onClick={() => setActiveColor(c.value)}
                                 className={cn(
-                                    "w-8 h-8 rounded-full border-2 transition-all",
+                                    "w-8 h-8 rounded-full border-2 transition-all shrink-0",
                                     activeColor === c.value ? "border-white scale-110" : "border-transparent"
                                 )}
                                 style={{ backgroundColor: c.value }}

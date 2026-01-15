@@ -52,10 +52,32 @@ export default function InfiniteCanvas({
     // Remote Data Handling
     useEffect(() => {
         if (!remoteData) return;
+
+        // Handle ZOOM
+        if (remoteData.type === 'ZOOM') {
+            const { scaleFactor } = remoteData.payload;
+
+            setTransform(prev => {
+                const newScale = Math.min(Math.max(prev.scale * scaleFactor, 0.1), 5);
+                // Optional: Adjust X/Y to zoom around center?
+                // Simple approach: Center-ish zoom (requires adjusting x/y based on ratio)
+                // But remote gives simple scalar.
+                // Let's just scale for now.
+                return {
+                    ...prev,
+                    scale: newScale
+                };
+            });
+            return;
+        }
+
         if (remoteData.type !== 'STROKE') return;
 
         const payload = remoteData.payload;
         const { action, point, tool, color } = payload;
+
+        // Note: If panning happens while drawing, the stroke might shift if we rely on "current transform" for START.
+        // Ideally we lock transform during remote stroke? Or just accept artifact.
 
         if (!containerRef.current) return;
         const { width, height } = containerRef.current.getBoundingClientRect();
@@ -94,12 +116,7 @@ export default function InfiniteCanvas({
         }
     }, [remoteData, transform]);
 
-    // Touch / Pointer Handling
-    // We need to distinguish between Drawing (1 finger/pen) and Panning/Zooming (2 fingers)
-    // Standard PointerEvents don't make this super easy without gesture logic.
-    // Simple heuristic: If Spacebar held or Middle Click -> Pan. 
-    // For Touch: Browser usually handles pinch-zoom if we don't preventDefault, but we want Custom Zoom.
-
+    // Local Touch / Pointer Handling
     const pointers = useRef<Map<number, { x: number, y: number }>>(new Map());
     const prevPinchDist = useRef<number | null>(null);
 
@@ -108,8 +125,6 @@ export default function InfiniteCanvas({
         pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
         if (pointers.current.size === 2) {
-            // Start Pinch/Pan gesture
-            // Calculate initial distance
             const pts = Array.from(pointers.current.values());
             prevPinchDist.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
             return;
@@ -117,7 +132,6 @@ export default function InfiniteCanvas({
 
         if (e.buttons !== 1 || pointers.current.size > 1) return;
 
-        // Drawing
         const rect = e.currentTarget.getBoundingClientRect();
         const point = {
             x: (e.clientX - rect.left - transform.x) / transform.scale,
@@ -136,16 +150,12 @@ export default function InfiniteCanvas({
         pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
         if (pointers.current.size === 2) {
-            // Handle Pinch Zoom / Pan
             const pts = Array.from(pointers.current.values());
             const newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
 
             if (prevPinchDist.current) {
                 const scaleFactor = newDist / prevPinchDist.current;
                 const newScale = Math.min(Math.max(transform.scale * scaleFactor, 0.1), 5);
-
-                // Zoom around center of pinch? Too complex for 1 file. 
-                // Simple: Zoom and simple pan delta.
                 setTransform(prev => ({
                     ...prev,
                     scale: newScale
@@ -191,9 +201,6 @@ export default function InfiniteCanvas({
                 const zoomSensitivity = 0.001;
                 const delta = -e.deltaY * zoomSensitivity;
                 const newScale = Math.min(Math.max(transform.scale + delta, 0.1), 5);
-
-                // Zoom towards mouse pointer
-                // simplified: just zoom
                 setTransform(prev => ({ ...prev, scale: newScale }));
             } else {
                 e.preventDefault();
