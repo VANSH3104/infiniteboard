@@ -25,7 +25,7 @@ const COLORS = [
 
 const Joystick = ({ onPan }: { onPan: (dx: number, dy: number) => void }) => {
     const stickRef = useRef<HTMLDivElement>(null);
-    const [active, setActive] = useRef(false);
+    const active = useRef(false);
     const [pos, setPos] = useState({ x: 0, y: 0 });
     const startPos = useRef({ x: 0, y: 0 });
     const animationFrame = useRef<number>(0);
@@ -33,7 +33,7 @@ const Joystick = ({ onPan }: { onPan: (dx: number, dy: number) => void }) => {
     const handleStart = (e: React.PointerEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        setActive.current = true;
+        active.current = true;
         stickRef.current?.setPointerCapture(e.pointerId);
         startPos.current = { x: e.clientX, y: e.clientY };
 
@@ -41,56 +41,10 @@ const Joystick = ({ onPan }: { onPan: (dx: number, dy: number) => void }) => {
     };
 
     const loop = () => {
-        if (!active.current) return;
-
-        // We need to read the current pos from a ref or state to send continuous updates?
-        // Actually, let's just update on move for now. If smoothness is issue, we loop.
-        // For simplicity, just sending updates on move is cleaner for PeerData bandwidth.
-        // BUT user wanted "scroll". Continuous scroll while holding is better.
-        // Let's stick to 1:1 mapping for now (drag stick = drag canvas).
-        // Actually, Joystick usually implies VELOCITY.
-        // "Scroll that moves the screen" -> sounds like D-pad or Joystick.
-        // If I drag stick right, should canvas KEEP moving right? Or move 1:1?
-        // Infinite Canvas usually implies 1:1 Pan.
-        // Let's try 1:1 Pan first.
+        // Warning: this loop might be orphaned if component unmounts?
+        // Relying on useEffect/animationFrame is better.
+        // We have a useEffect below that starts the loop.
     };
-
-    const handleMove = (e: React.PointerEvent) => {
-        if (!active.current) return;
-        e.preventDefault();
-        e.stopPropagation();
-
-        const maxDist = 40;
-        const dx = e.clientX - startPos.current.x;
-        const dy = e.clientY - startPos.current.y;
-        const dist = Math.hypot(dx, dy);
-
-        const clampedDist = Math.min(dist, maxDist);
-        const angle = Math.atan2(dy, dx);
-
-        const x = Math.cos(angle) * clampedDist;
-        const y = Math.sin(angle) * clampedDist;
-
-        setPos({ x, y });
-
-        // 1:1 Pan behavior (Drag stick = Drag canvas directly)
-        // Sensitivity needs to be high.
-        // Actually, if it's a joystick, it should probably be velocity based?
-        // No, let's do direct manipulation for now, acts like a mini-trackpad.
-        onPan(-dx * 0.1, -dy * 0.1);
-        // Wait, dx is cumulative from start.
-        // We need delta from LAST move.
-    };
-
-    // Better Joystick Logic: Velocity based?
-    // Let's implement a simple "Trackpad" area instead?
-    // User said "scroll that move the screen".
-    // Let's Stick to the "Joystick" visual but make it act like a D-Pad (Velocity).
-    // If I hold Right, it keeps scrolling Right.
-
-    // Changing implementation to Velocity Loop.
-
-    const currentVector = useRef({ x: 0, y: 0 });
 
     const handleMoveVelocity = (e: React.PointerEvent) => {
         if (!active.current) return;
@@ -114,6 +68,8 @@ const Joystick = ({ onPan }: { onPan: (dx: number, dy: number) => void }) => {
         currentVector.current = { x: x / maxDist, y: y / maxDist };
     };
 
+    const currentVector = useRef({ x: 0, y: 0 });
+
     useEffect(() => {
         let frame: number;
         const run = () => {
@@ -131,7 +87,7 @@ const Joystick = ({ onPan }: { onPan: (dx: number, dy: number) => void }) => {
     }, [onPan]);
 
     const handleEnd = (e: React.PointerEvent) => {
-        setActive.current = false;
+        active.current = false;
         setPos({ x: 0, y: 0 });
         currentVector.current = { x: 0, y: 0 };
     };
