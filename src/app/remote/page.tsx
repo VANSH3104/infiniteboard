@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef, Suspense } from "react";
 import { usePeer } from "@/hooks/usePeer";
 import { useSearchParams } from "next/navigation";
-import { Edit2, Eraser, Loader2 } from "lucide-react";
+import { Edit2, Eraser, Loader2, Trash2 } from "lucide-react";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -26,12 +26,11 @@ function RemoteContent() {
     const hostId = searchParams.get("hostId");
     const { connectToHost, sendData, isConnected, isReady } = usePeer();
     const [activeTool, setActiveTool] = useState<'PEN' | 'ERASER'>('PEN');
-    const [activeColor, setActiveColor] = useState<string>(COLORS[0].value);
+    const [activeColor, setActiveColor] = useState<string>(COLORS[1].value); // Default to Black
     const [trail, setTrail] = useState<{ x: number, y: number }[]>([]);
 
     const padRef = useRef<HTMLDivElement>(null);
 
-    // Multi-touch Zoom Logic
     const pointers = useRef<Map<number, { x: number, y: number }>>(new Map());
     const prevPinchDist = useRef<number | null>(null);
     const isZooming = useRef(false);
@@ -56,13 +55,16 @@ function RemoteContent() {
             pressure: e.pressure
         };
 
+        const ratio = rect.width / rect.height;
+
         sendData({
             type: 'STROKE',
             payload: {
                 action,
                 point: normalizedPoint,
                 tool: activeTool,
-                color: activeColor
+                color: activeColor,
+                ratio: ratio
             }
         });
 
@@ -80,9 +82,8 @@ function RemoteContent() {
             const pts = Array.from(pointers.current.values());
             prevPinchDist.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
 
-            // Cancel any active drawing
             setTrail([]);
-            sendData({ type: 'STROKE', payload: { action: 'END', tool: activeTool } }); // Force end stroke
+            sendData({ type: 'STROKE', payload: { action: 'END', tool: activeTool } });
             return;
         }
 
@@ -97,13 +98,11 @@ function RemoteContent() {
         pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
         if (pointers.current.size === 2) {
-            // Handle Pinch
             const pts = Array.from(pointers.current.values());
             const newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
 
             if (prevPinchDist.current) {
                 const scaleFactor = newDist / prevPinchDist.current;
-                // Send Zoom Event
                 sendData({
                     type: 'ZOOM',
                     payload: { scaleFactor }
@@ -124,7 +123,6 @@ function RemoteContent() {
         pointers.current.delete(e.pointerId);
 
         if (pointers.current.size < 2) {
-            // Reset zoom state if fingers lifted
             prevPinchDist.current = null;
             if (pointers.current.size === 0) {
                 isZooming.current = false;
@@ -137,10 +135,20 @@ function RemoteContent() {
         }
     };
 
+    const handleClearCanvas = () => {
+        if (window.confirm("Are you sure you want to clear the entire canvas?")) {
+            sendData({ type: 'CLEAR', payload: {} });
+        }
+    };
+
     useEffect(() => {
         const preventDefault = (e: Event) => e.preventDefault();
         document.body.addEventListener('touchmove', preventDefault, { passive: false });
-        return () => document.body.removeEventListener('touchmove', preventDefault);
+        document.body.addEventListener('gesturestart', preventDefault);
+        return () => {
+            document.body.removeEventListener('touchmove', preventDefault);
+            document.body.removeEventListener('gesturestart', preventDefault);
+        };
     }, []);
 
     if (!hostId) {
@@ -203,7 +211,7 @@ function RemoteContent() {
             </div>
 
             {/* Toolbar */}
-            <div className="bg-neutral-900 border-t border-neutral-800 z-10 w-full flex flex-col">
+            <div className="bg-neutral-900 border-t border-neutral-800 z-10 w-full flex flex-col pb-safe">
 
                 {/* Color Palette */}
                 {activeTool === 'PEN' && (
@@ -223,11 +231,11 @@ function RemoteContent() {
                 )}
 
                 {/* Tools */}
-                <div className="flex items-center justify-center gap-6 p-4 pb-8 border-t border-neutral-800">
+                <div className="flex items-center justify-center gap-4 p-4 pb-8 border-t border-neutral-800">
                     <button
                         onClick={() => setActiveTool('PEN')}
                         className={cn(
-                            "flex flex-col items-center gap-2 transition-all p-3 rounded-2xl w-24",
+                            "flex flex-col items-center gap-2 transition-all p-3 rounded-2xl w-20",
                             activeTool === 'PEN'
                                 ? "bg-neutral-800 text-white"
                                 : "text-neutral-500"
@@ -240,7 +248,7 @@ function RemoteContent() {
                     <button
                         onClick={() => setActiveTool('ERASER')}
                         className={cn(
-                            "flex flex-col items-center gap-2 transition-all p-3 rounded-2xl w-24",
+                            "flex flex-col items-center gap-2 transition-all p-3 rounded-2xl w-20",
                             activeTool === 'ERASER'
                                 ? "bg-neutral-800 text-white"
                                 : "text-neutral-500"
@@ -248,6 +256,14 @@ function RemoteContent() {
                     >
                         <Eraser size={20} className={activeTool === 'ERASER' ? "text-rose-400" : ""} />
                         <span className="text-[10px] font-medium uppercase tracking-wider">Eraser</span>
+                    </button>
+
+                    <button
+                        onClick={handleClearCanvas}
+                        className="flex flex-col items-center gap-2 transition-all p-3 rounded-2xl w-20 text-neutral-500 active:text-red-500 hover:bg-neutral-800"
+                    >
+                        <Trash2 size={20} />
+                        <span className="text-[10px] font-medium uppercase tracking-wider">Clear</span>
                     </button>
                 </div>
             </div>

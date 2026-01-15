@@ -4,7 +4,7 @@ import React, { useRef, useState, useEffect } from "react";
 import { getStroke } from "perfect-freehand";
 import { getSvgPathFromStroke, Stroke, Point } from "./Renderer";
 import { PeerData } from "@/hooks/usePeer";
-import { ZoomIn, ZoomOut, Maximize } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize, Trash2 } from "lucide-react";
 
 interface InfiniteCanvasProps {
     onStrokeComplete: (stroke: Stroke) => void;
@@ -19,6 +19,7 @@ export default function InfiniteCanvas({
     const [currentStroke, setCurrentStroke] = useState<Stroke | null>(null);
     const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
     const [remoteStroke, setRemoteStroke] = useState<Stroke | null>(null);
+    const [remoteRatio, setRemoteRatio] = useState<number | null>(null);
 
     const containerRef = useRef<HTMLDivElement>(null);
 
@@ -40,6 +41,11 @@ export default function InfiniteCanvas({
         }
     }, [strokes]);
 
+    const clearCanvas = () => {
+        setStrokes([]);
+        localStorage.removeItem('infinite-pad-strokes');
+    };
+
     // Coordinate conversion
     const toWorld = (clientPoint: { x: number, y: number, pressure?: number }) => {
         return {
@@ -53,16 +59,17 @@ export default function InfiniteCanvas({
     useEffect(() => {
         if (!remoteData) return;
 
+        // Handle CLEAR
+        if (remoteData.type === 'CLEAR') {
+            clearCanvas();
+            return;
+        }
+
         // Handle ZOOM
         if (remoteData.type === 'ZOOM') {
             const { scaleFactor } = remoteData.payload;
-
             setTransform(prev => {
                 const newScale = Math.min(Math.max(prev.scale * scaleFactor, 0.1), 5);
-                // Optional: Adjust X/Y to zoom around center?
-                // Simple approach: Center-ish zoom (requires adjusting x/y based on ratio)
-                // But remote gives simple scalar.
-                // Let's just scale for now.
                 return {
                     ...prev,
                     scale: newScale
@@ -74,28 +81,43 @@ export default function InfiniteCanvas({
         if (remoteData.type !== 'STROKE') return;
 
         const payload = remoteData.payload;
-        const { action, point, tool, color } = payload;
+        const { action, point, tool, color, ratio } = payload;
 
-        // Note: If panning happens while drawing, the stroke might shift if we rely on "current transform" for START.
-        // Ideally we lock transform during remote stroke? Or just accept artifact.
+        if (ratio && ratio !== remoteRatio) {
+            setRemoteRatio(ratio);
+        }
 
         if (!containerRef.current) return;
         const { width, height } = containerRef.current.getBoundingClientRect();
 
-        // Normalize -> Screen Pixel
-        const screenPoint = {
-            x: point.x * width,
-            y: point.y * height,
-            pressure: point.pressure
-        };
+        // Aspect Ratio Corection
+        let screenPoint = { x: 0, y: 0, pressure: point.pressure };
+
+        if (remoteRatio) {
+            const targetHeight = height;
+            const targetWidth = height * remoteRatio;
+            const offsetX = (width - targetWidth) / 2;
+
+            screenPoint = {
+                x: offsetX + (point.x * targetWidth),
+                y: point.y * targetHeight,
+                pressure: point.pressure
+            };
+        } else {
+            screenPoint = {
+                x: point.x * width,
+                y: point.y * height,
+                pressure: point.pressure
+            };
+        }
 
         const worldPoint = toWorld(screenPoint);
 
         if (action === 'START') {
             setRemoteStroke({
                 points: [worldPoint],
-                color: tool === 'ERASER' ? '#ffffff' : (color || '#000000'),
-                size: tool === 'ERASER' ? 20 : 8
+                color: tool === 'ERASER' ? '#fafafa' : (color || '#000000'),
+                size: tool === 'ERASER' ? 40 : 8
             });
         } else if (action === 'MOVE') {
             setRemoteStroke(prev => {
@@ -114,7 +136,7 @@ export default function InfiniteCanvas({
                 return null;
             });
         }
-    }, [remoteData, transform]);
+    }, [remoteData, transform, remoteRatio]);
 
     // Local Touch / Pointer Handling
     const pointers = useRef<Map<number, { x: number, y: number }>>(new Map());
@@ -234,7 +256,6 @@ export default function InfiniteCanvas({
         return getSvgPathFromStroke(outline);
     };
 
-    // Zoom Helpers
     const zoomIn = () => setTransform(p => ({ ...p, scale: Math.min(p.scale * 1.2, 5) }));
     const zoomOut = () => setTransform(p => ({ ...p, scale: Math.max(p.scale / 1.2, 0.1) }));
     const resetZoom = () => setTransform({ x: 0, y: 0, scale: 1 });
@@ -268,7 +289,7 @@ export default function InfiniteCanvas({
                 </svg>
             </div>
 
-            {/* Zoom Controls */}
+            {/* Zoom & Tools Controls */}
             <div className="absolute bottom-6 right-6 flex flex-col gap-2 bg-white/90 backdrop-blur shadow-lg rounded-xl p-2 border border-neutral-200">
                 <button onClick={zoomIn} className="p-2 hover:bg-neutral-100 rounded-lg text-neutral-600 transition-colors" title="Zoom In">
                     <ZoomIn size={20} />
@@ -278,6 +299,9 @@ export default function InfiniteCanvas({
                 </button>
                 <button onClick={zoomOut} className="p-2 hover:bg-neutral-100 rounded-lg text-neutral-600 transition-colors" title="Zoom Out">
                     <ZoomOut size={20} />
+                </button>
+                <button onClick={() => { if (confirm('Clear Canvas?')) clearCanvas() }} className="p-2 hover:bg-red-50 text-red-500 rounded-lg transition-colors border-t border-neutral-100 mt-1" title="Clear Canvas">
+                    <Trash2 size={20} />
                 </button>
                 <div className="text-[10px] text-center font-mono text-neutral-400 border-t pt-1 mt-1">
                     {(transform.scale * 100).toFixed(0)}%
