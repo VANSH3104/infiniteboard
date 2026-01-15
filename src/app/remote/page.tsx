@@ -154,17 +154,11 @@ function RemoteContent() {
             }
 
             if (prevCentroid.current) {
-                let scaleFactor = 1;
-                if (prevPinchDist.current && newDist > 0) {
-                    scaleFactor = newDist / prevPinchDist.current;
-                }
-
+                const scaleFactor = 1; // ZOOMS DISABLED
                 const deltaX = newCentroid.x - prevCentroid.current.x;
                 const deltaY = newCentroid.y - prevCentroid.current.y;
 
-                if (Math.abs(scaleFactor - 1) < 0.03) scaleFactor = 1; // Deadzone to prevent jittery zoom when panning
-
-                if (Math.abs(deltaX) > 0.5 || Math.abs(deltaY) > 0.5 || Math.abs(scaleFactor - 1) > 0.001) {
+                if (Math.abs(deltaX) > 0.5 || Math.abs(deltaY) > 0.5) {
                     sendData({
                         type: 'PAN_ZOOM',
                         payload: { scaleFactor, deltaX, deltaY }
@@ -229,7 +223,7 @@ function RemoteContent() {
 
     const mapColor = (c: string) => {
         if (c === '#000000' || c === '#000') return '#ffffff';
-        if (c === '#fafafa' || c === '#ffffff') return '#0a0a0a'; // Eraser from host might show as black on phone?
+        if (c === '#fafafa' || c === '#ffffff') return '#171717'; // Eraser matches bg-neutral-900
         return c;
     };
 
@@ -294,7 +288,7 @@ function RemoteContent() {
                     <polyline
                         points={trail.map(p => `${p.x},${p.y}`).join(' ')}
                         fill="none"
-                        stroke={activeTool === 'ERASER' ? '#0a0a0a' : activeColor}
+                        stroke={activeTool === 'ERASER' ? '#171717' : activeColor}
                         strokeWidth="4"
                         strokeLinecap="round"
                         strokeLinejoin="round"
