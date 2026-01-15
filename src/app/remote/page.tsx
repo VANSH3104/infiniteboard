@@ -52,6 +52,11 @@ function RemoteContent() {
     // Listen for Sync Data
     useEffect(() => {
         setOnData((data: PeerData) => {
+            if (data.type === 'STROKE_ADDED') {
+                if (data.payload.stroke) {
+                    setMirroredStrokes(prev => [...prev, data.payload.stroke]);
+                }
+            }
             if (data.type === 'SYNC_STROKES') {
                 if (Array.isArray(data.payload.strokes)) {
                     setMirroredStrokes(data.payload.strokes);

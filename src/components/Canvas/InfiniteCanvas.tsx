@@ -63,7 +63,7 @@ export default function InfiniteCanvas({
         return () => obs.disconnect();
     }, []);
 
-    // Sync Everything when connection count increases
+    // Sync Everything (FULL) when connection count increases
     useEffect(() => {
         if (connectionCount > prevConnectionCount.current) {
             broadcast({ type: 'SYNC_STROKES', payload: { strokes } });
@@ -82,16 +82,8 @@ export default function InfiniteCanvas({
         broadcast({ type: 'SYNC_DIMENSIONS', payload: { dimensions } });
     }, [dimensions, broadcast]);
 
-    useEffect(() => {
-        // Incremental Sync logic could go here, but full sync on 'connection' is fine for now.
-        // If we wanted real-time stroke syncing (watching Host draw), we'd need to broadcast currentStroke.
-        // For now, mirroring only updates when stroke ends?
-        // Wait, if I draw on Host, does Remote see it live?
-        // No, `setStrokes` happens at END.
-        // So Remote only sees finished strokes. That's acceptable for v1.
-        broadcast({ type: 'SYNC_STROKES', payload: { strokes } });
-    }, [strokes, broadcast]);
-
+    // REMOVED: Heavy useEffect [strokes] broadcast.
+    // Instead we broadcast incrementally.
 
     const clearCanvas = () => {
         setStrokes([]);
@@ -191,12 +183,14 @@ export default function InfiniteCanvas({
                 if (prev) {
                     const newStrokes = [...strokes, prev];
                     setStrokes(newStrokes);
+                    // Broadcast NEW stroke to remotes
+                    broadcast({ type: 'STROKE_ADDED', payload: { stroke: prev } });
                     return null;
                 }
                 return null;
             });
         }
-    }, [remoteData, transform, remoteRatio]);
+    }, [remoteData, transform, remoteRatio, broadcast]); // Added broadcast to dep
 
     const pointers = useRef<Map<number, { x: number, y: number }>>(new Map());
     const prevPinchDist = useRef<number | null>(null);
@@ -273,6 +267,10 @@ export default function InfiniteCanvas({
 
         setStrokes([...strokes, currentStroke]);
         onStrokeComplete(currentStroke);
+
+        // Broadcast local stroke
+        broadcast({ type: 'STROKE_ADDED', payload: { stroke: currentStroke } });
+
         setCurrentStroke(null);
     };
 

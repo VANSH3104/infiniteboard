@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import Peer, { DataConnection } from 'peerjs';
 
 export type PeerData = {
-  type: 'STROKE' | 'CURSOR' | 'CLEAR' | 'PAN_ZOOM' | 'SYNC_STROKES' | 'SYNC_TRANSFORM' | 'SYNC_DIMENSIONS' | 'ZOOM';
+  type: 'STROKE' | 'CURSOR' | 'CLEAR' | 'PAN_ZOOM' | 'SYNC_STROKES' | 'SYNC_TRANSFORM' | 'SYNC_DIMENSIONS' | 'ZOOM' | 'STROKE_ADDED';
   payload: any;
 };
 
