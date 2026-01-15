@@ -220,6 +220,12 @@ function RemoteContent() {
         };
     }, []);
 
+    const mapColor = (c: string) => {
+        if (c === '#000000' || c === '#000') return '#ffffff';
+        if (c === '#fafafa' || c === '#ffffff') return '#0a0a0a'; // Eraser from host might show as black on phone?
+        return c;
+    };
+
     const renderMirroredStroke = (stroke: any) => {
         if (!stroke.points) return '';
         const outline = getStroke(stroke.points, {
@@ -268,7 +274,7 @@ function RemoteContent() {
                         preserveAspectRatio="xMidYMid slice" // Fill the phone screen 
                     >
                         {mirroredStrokes.map((s, i) => (
-                            <path key={i} d={renderMirroredStroke(s)} fill={s.color} />
+                            <path key={i} d={renderMirroredStroke(s)} fill={mapColor(s.color)} />
                         ))}
                     </svg>
                 </div>
@@ -281,7 +287,7 @@ function RemoteContent() {
                     <polyline
                         points={trail.map(p => `${p.x},${p.y}`).join(' ')}
                         fill="none"
-                        stroke={activeTool === 'ERASER' ? '#ffffff' : activeColor}
+                        stroke={activeTool === 'ERASER' ? '#0a0a0a' : activeColor}
                         strokeWidth="4"
                         strokeLinecap="round"
                         strokeLinejoin="round"

@@ -146,7 +146,9 @@ export default function InfiniteCanvas({
         if (!containerRef.current) return;
         const { width, height } = containerRef.current.getBoundingClientRect();
 
-        let screenPoint = { x: 0, y: 0, pressure: point.pressure };
+        if (!point) return;
+
+        let screenPoint = { x: 0, y: 0, pressure: point.pressure || 0.5 };
 
         if (remoteRatio) {
             const targetHeight = height;
