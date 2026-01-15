@@ -32,9 +32,10 @@ function RemoteContent() {
     const [activeColor, setActiveColor] = useState<string>(COLORS[0].value);
     const [trail, setTrail] = useState<{ x: number, y: number }[]>([]);
 
-    // Mirroring Sate
+    // Mirroring state
     const [mirroredStrokes, setMirroredStrokes] = useState<any[]>([]);
     const [hostTransform, setHostTransform] = useState({ x: 0, y: 0, scale: 1 });
+    const [hostDimensions, setHostDimensions] = useState({ width: 1920, height: 1080 }); // Default fallback
 
     const padRef = useRef<HTMLDivElement>(null);
     const pointers = useRef<Map<number, { x: number, y: number }>>(new Map());
@@ -58,6 +59,9 @@ function RemoteContent() {
             }
             if (data.type === 'SYNC_TRANSFORM') {
                 setHostTransform(data.payload.transform);
+            }
+            if (data.type === 'SYNC_DIMENSIONS') {
+                setHostDimensions(data.payload.dimensions);
             }
         });
     }, [setOnData]);
@@ -84,7 +88,7 @@ function RemoteContent() {
             payload: {
                 action,
                 point: normalizedPoint,
-                tool: activeTool === 'MOVE' ? 'PEN' : activeTool, // Fallback if buggy? No, stroke shouldn't fire if MOVE.
+                tool: activeTool === 'MOVE' ? 'PEN' : activeTool,
                 color: activeColor,
                 ratio: ratio
             }
@@ -102,21 +106,18 @@ function RemoteContent() {
         if (pointers.current.size === 2 || activeTool === 'MOVE') {
             isZooming.current = true;
 
-            // Setup for Pan/Zoom
             const pts = Array.from(pointers.current.values());
 
             if (pointers.current.size === 2) {
                 prevPinchDist.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
                 prevCentroid.current = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
             } else {
-                // Single finger Move
-                prevPinchDist.current = null; // No zoom
+                prevPinchDist.current = null;
                 prevCentroid.current = { x: pts[0].x, y: pts[0].y };
             }
 
             setTrail([]);
-            // End any stroke if switching modes
-            if (activeTool !== 'MOVE') { // If we were inadvertently drawing
+            if (activeTool !== 'MOVE') {
                 sendData({ type: 'STROKE', payload: { action: 'END', tool: activeTool } });
             }
             return;
@@ -143,12 +144,11 @@ function RemoteContent() {
                 newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
                 newCentroid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
             } else {
-                newDist = 0; // No zoom
+                newDist = 0;
                 newCentroid = { x: pts[0].x, y: pts[0].y };
             }
 
             if (prevCentroid.current) {
-                // Calculate Scale
                 let scaleFactor = 1;
                 if (prevPinchDist.current && newDist > 0) {
                     scaleFactor = newDist / prevPinchDist.current;
@@ -180,14 +180,11 @@ function RemoteContent() {
         e.preventDefault();
         pointers.current.delete(e.pointerId);
 
-        // Reset logic
         if (activeTool === 'MOVE') {
             if (pointers.current.size === 0) {
-                // End move
                 prevCentroid.current = null;
                 isZooming.current = false;
             } else {
-                // Reset centroid to remaining finger?
                 const pts = Array.from(pointers.current.values());
                 prevCentroid.current = { x: pts[0].x, y: pts[0].y };
             }
@@ -237,6 +234,14 @@ function RemoteContent() {
 
     if (!hostId) return <div className="flex items-center justify-center h-screen bg-black text-white">No ID</div>;
 
+    // Calculate ViewBox to match Host Viewport logic
+    // WorldX = (ScreenX - Tx) / Scale
+    // If ScreenX = 0, WorldX = -Tx / Scale
+    const vx = -(hostTransform.x || 0) / (hostTransform.scale || 1);
+    const vy = -(hostTransform.y || 0) / (hostTransform.scale || 1);
+    const vw = (hostDimensions.width || 1920) / (hostTransform.scale || 1);
+    const vh = (hostDimensions.height || 1080) / (hostTransform.scale || 1);
+
     return (
         <div className="fixed inset-0 bg-neutral-950 text-white flex flex-col select-none overscroll-none overflow-hidden">
             {/* Status Dot */}
@@ -256,20 +261,16 @@ function RemoteContent() {
                 onPointerLeave={handlePointerUp}
             >
                 <div className="absolute inset-0 pointer-events-none opacity-50">
-                    <div
-                        style={{
-                            transform: `translate(${hostTransform.x}px, ${hostTransform.y}px) scale(${hostTransform.scale})`,
-                            transformOrigin: '0 0',
-                            width: '100%',
-                            height: '100%'
-                        }}
+                    {/* Render EXACTLY what the host sees by matching viewBox */}
+                    <svg
+                        className="w-full h-full"
+                        viewBox={`${vx} ${vy} ${vw} ${vh}`}
+                        preserveAspectRatio="xMidYMid slice" // Fill the phone screen 
                     >
-                        <svg className="overflow-visible w-[5000px] h-[5000px]">
-                            {mirroredStrokes.map((s, i) => (
-                                <path key={i} d={renderMirroredStroke(s)} fill={s.color} />
-                            ))}
-                        </svg>
-                    </div>
+                        {mirroredStrokes.map((s, i) => (
+                            <path key={i} d={renderMirroredStroke(s)} fill={s.color} />
+                        ))}
+                    </svg>
                 </div>
 
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-10">
@@ -289,23 +290,23 @@ function RemoteContent() {
             </div>
 
             {/* Toolbar */}
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-neutral-800/90 backdrop-blur border border-neutral-700 p-2 rounded-3xl shadow-2xl z-30 pb-safe">
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-neutral-800/90 backdrop-blur border border-neutral-700 p-2 rounded-3xl shadow-2xl z-30 pb-safe max-w-[90vw] overflow-hidden">
                 <button
                     onClick={() => setActiveTool('PEN')}
-                    className={cn("p-3 rounded-full transition-all", activeTool === 'PEN' ? "bg-indigo-500 text-white shadow-lg" : "text-neutral-400")}
+                    className={cn("p-3 rounded-full transition-all shrink-0", activeTool === 'PEN' ? "bg-indigo-500 text-white shadow-lg" : "text-neutral-400")}
                 >
                     <Edit2 size={20} />
                 </button>
 
                 <button
                     onClick={() => setActiveTool('MOVE')}
-                    className={cn("p-3 rounded-full transition-all", activeTool === 'MOVE' ? "bg-blue-500 text-white shadow-lg" : "text-neutral-400")}
+                    className={cn("p-3 rounded-full transition-all shrink-0", activeTool === 'MOVE' ? "bg-blue-500 text-white shadow-lg" : "text-neutral-400")}
                 >
                     <Move size={20} />
                 </button>
 
                 {activeTool === 'PEN' && (
-                    <div className="flex gap-2 px-2 overflow-x-auto max-w-[120px] no-scrollbar">
+                    <div className="flex gap-2 px-2 overflow-x-auto overflow-y-hidden no-scrollbar w-auto touch-pan-x pointer-events-auto">
                         {COLORS.slice(0, 5).map(c => (
                             <button
                                 key={c.name}
@@ -319,16 +320,16 @@ function RemoteContent() {
 
                 <button
                     onClick={() => setActiveTool('ERASER')}
-                    className={cn("p-3 rounded-full transition-all", activeTool === 'ERASER' ? "bg-rose-500 text-white shadow-lg" : "text-neutral-400")}
+                    className={cn("p-3 rounded-full transition-all shrink-0", activeTool === 'ERASER' ? "bg-rose-500 text-white shadow-lg" : "text-neutral-400")}
                 >
                     <Eraser size={20} />
                 </button>
 
-                <div className="w-px h-6 bg-neutral-700 mx-1" />
+                <div className="w-px h-6 bg-neutral-700 mx-1 shrink-0" />
 
                 <button
                     onClick={handleClearCanvas}
-                    className="p-3 rounded-full text-neutral-400 hover:text-red-400 hover:bg-red-900/30 transition-all"
+                    className="p-3 rounded-full text-neutral-400 hover:text-red-400 hover:bg-red-900/30 transition-all shrink-0"
                 >
                     <Trash2 size={20} />
                 </button>

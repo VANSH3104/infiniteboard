@@ -3,7 +3,7 @@
 import React, { useRef, useState, useEffect } from "react";
 import { getStroke } from "perfect-freehand";
 import { getSvgPathFromStroke, Stroke, Point } from "./Renderer";
-import { PeerData, usePeer } from "@/hooks/usePeer"; // import usePeer types
+import { PeerData, usePeer } from "@/hooks/usePeer";
 import { ZoomIn, ZoomOut, Maximize, Trash2 } from "lucide-react";
 
 interface InfiniteCanvasProps {
@@ -24,6 +24,7 @@ export default function InfiniteCanvas({
     const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
     const [remoteStroke, setRemoteStroke] = useState<Stroke | null>(null);
     const [remoteRatio, setRemoteRatio] = useState<number | null>(null);
+    const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
     const containerRef = useRef<HTMLDivElement>(null);
     const prevConnectionCount = useRef(0);
@@ -49,29 +50,55 @@ export default function InfiniteCanvas({
         }
     }, [strokes]);
 
-    // Sync Strokes to Remote on Connection OR Change
+    // Track Dimensions
     useEffect(() => {
-        // If a new person connects, send them everything
+        if (!containerRef.current) return;
+        const obs = new ResizeObserver(entries => {
+            for (let entry of entries) {
+                const { width, height } = entry.contentRect;
+                setDimensions({ width, height });
+            }
+        });
+        obs.observe(containerRef.current);
+        return () => obs.disconnect();
+    }, []);
+
+    // Sync Everything when connection count increases
+    useEffect(() => {
         if (connectionCount > prevConnectionCount.current) {
             broadcast({ type: 'SYNC_STROKES', payload: { strokes } });
             broadcast({ type: 'SYNC_TRANSFORM', payload: { transform } });
+            broadcast({ type: 'SYNC_DIMENSIONS', payload: { dimensions } });
         }
         prevConnectionCount.current = connectionCount;
-    }, [connectionCount, strokes, transform, broadcast]);
+    }, [connectionCount, strokes, transform, dimensions, broadcast]);
 
-    // Broadcast Transform on change (debouncing would be good but for now direct)
+    // Individual Broadcasts
     useEffect(() => {
         broadcast({ type: 'SYNC_TRANSFORM', payload: { transform } });
     }, [transform, broadcast]);
+
+    useEffect(() => {
+        broadcast({ type: 'SYNC_DIMENSIONS', payload: { dimensions } });
+    }, [dimensions, broadcast]);
+
+    useEffect(() => {
+        // Incremental Sync logic could go here, but full sync on 'connection' is fine for now.
+        // If we wanted real-time stroke syncing (watching Host draw), we'd need to broadcast currentStroke.
+        // For now, mirroring only updates when stroke ends?
+        // Wait, if I draw on Host, does Remote see it live?
+        // No, `setStrokes` happens at END.
+        // So Remote only sees finished strokes. That's acceptable for v1.
+        broadcast({ type: 'SYNC_STROKES', payload: { strokes } });
+    }, [strokes, broadcast]);
 
 
     const clearCanvas = () => {
         setStrokes([]);
         try { localStorage.removeItem('infinite-pad-strokes'); } catch (e) { }
-        broadcast({ type: 'SYNC_STROKES', payload: { strokes: [] } }); // Sync clear
+        broadcast({ type: 'SYNC_STROKES', payload: { strokes: [] } });
     };
 
-    // Coordinate conversion
     const toWorld = (clientPoint: { x: number, y: number, pressure?: number }) => {
         const safeScale = Number.isFinite(transform.scale) && transform.scale > 0 ? transform.scale : 1;
         const safeX = Number.isFinite(transform.x) ? transform.x : 0;
@@ -84,17 +111,14 @@ export default function InfiniteCanvas({
         };
     };
 
-    // Remote Data Handling
     useEffect(() => {
         if (!remoteData) return;
 
-        // Handle CLEAR
         if (remoteData.type === 'CLEAR') {
             clearCanvas();
             return;
         }
 
-        // Handle PAN_ZOOM
         if (remoteData.type === 'PAN_ZOOM') {
             const { scaleFactor, deltaX, deltaY } = remoteData.payload;
             setTransform(prev => {
@@ -122,7 +146,6 @@ export default function InfiniteCanvas({
         if (!containerRef.current) return;
         const { width, height } = containerRef.current.getBoundingClientRect();
 
-        // Aspect Ratio Corection
         let screenPoint = { x: 0, y: 0, pressure: point.pressure };
 
         if (remoteRatio) {
@@ -166,17 +189,6 @@ export default function InfiniteCanvas({
                 if (prev) {
                     const newStrokes = [...strokes, prev];
                     setStrokes(newStrokes);
-
-                    // Broadcast this new stroke to remotes so they can update!
-                    // Or just broadcast all? A single stroke is smaller.
-                    // For simplicity, I'm relying on the main `useEffect` [strokes] trigger above? 
-                    // No, that triggers on *every* stroke. Expensive for "move".
-                    // But `setStrokes` updates state. The Effect will fire. 
-                    // We should optimize: Effect only on *added* stroke?
-                    // The effect `[connectionCount, strokes]` will fire every time `strokes` changes.
-                    // Sending full array is robust but heavy.
-                    // Let's send FULL for now. If laggy, we switch to incremental.
-                    // Actually... 100 strokes is fine. 1000 might lag.
                     return null;
                 }
                 return null;
@@ -184,7 +196,6 @@ export default function InfiniteCanvas({
         }
     }, [remoteData, transform, remoteRatio]);
 
-    // Local Touch / Pointer Handling
     const pointers = useRef<Map<number, { x: number, y: number }>>(new Map());
     const prevPinchDist = useRef<number | null>(null);
 
@@ -263,7 +274,6 @@ export default function InfiniteCanvas({
         setCurrentStroke(null);
     };
 
-    // Wheel Zoom
     useEffect(() => {
         const handleWheel = (e: WheelEvent) => {
             if (e.ctrlKey || e.metaKey) {
@@ -343,7 +353,6 @@ export default function InfiniteCanvas({
                 </svg>
             </div>
 
-            {/* Zoom & Tools Controls */}
             <div className="absolute bottom-6 right-6 flex flex-col gap-2 bg-white/90 backdrop-blur shadow-lg rounded-xl p-2 border border-neutral-200">
                 <button onClick={zoomIn} className="p-2 hover:bg-neutral-100 rounded-lg text-neutral-600 transition-colors" title="Zoom In">
                     <ZoomIn size={20} />
