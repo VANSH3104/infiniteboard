@@ -15,7 +15,7 @@ export const usePeer = () => {
   const isPeerCreated = useRef(false);
 
   // Buffer for incoming data
-  const onDataRef = useRef<((data: PeerData) => void) | null>(null);
+  const onDataRef = useRef<((data: PeerData, peerId: string) => void) | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -42,7 +42,7 @@ export const usePeer = () => {
 
       conn.on('data', (data: any) => {
         if (onDataRef.current) {
-          onDataRef.current(data);
+          onDataRef.current(data, conn.peer);
         }
       });
 
@@ -84,7 +84,8 @@ export const usePeer = () => {
 
     conn.on('data', (data: any) => {
       if (onDataRef.current) {
-        onDataRef.current(data);
+        // When receiving data as a client, the sender is the host (conn.peer)
+        onDataRef.current(data, conn.peer);
       }
     });
 
@@ -98,21 +99,21 @@ export const usePeer = () => {
     });
   }, [isReady, connections]);
 
-  const sendData = (data: PeerData) => {
+  const sendData = useCallback((data: PeerData) => {
     connections.forEach((conn) => {
       if (conn.open) {
         conn.send(data);
       }
     });
-  };
+  }, [connections]);
 
-  const broadcast = (data: PeerData) => {
+  const broadcast = useCallback((data: PeerData) => {
     sendData(data);
-  };
+  }, [sendData]);
 
-  const setOnData = (callback: (data: PeerData) => void) => {
+  const setOnData = useCallback((callback: (data: PeerData, peerId: string) => void) => {
     onDataRef.current = callback;
-  };
+  }, []);
 
   return { peerId, isReady, connections, connectToHost, sendData, broadcast, setOnData, isConnected: connections.length > 0 };
 };

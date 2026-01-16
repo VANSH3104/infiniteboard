@@ -20,8 +20,8 @@ export default function Home() {
   }, [connections.length]);
 
   useEffect(() => {
-    setOnData((data) => {
-      setRemoteData(data);
+    setOnData((data, peerId) => {
+      setRemoteData({ data, peerId });
     });
   }, [setOnData]);
 
@@ -37,7 +37,7 @@ export default function Home() {
           }}
           remoteData={remoteData}
           broadcast={broadcast}
-          connectionCount={connections.length}
+          connections={connections}
         />
 
         {/* Overlay UI */}

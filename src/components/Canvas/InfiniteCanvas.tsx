@@ -4,20 +4,21 @@ import React, { useRef, useState, useEffect } from "react";
 import { getStroke } from "perfect-freehand";
 import { getSvgPathFromStroke, Stroke, Point } from "./Renderer";
 import { PeerData, usePeer } from "@/hooks/usePeer";
-import { ZoomIn, ZoomOut, Maximize, Trash2 } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize, Trash2, Smartphone } from "lucide-react";
+import { DataConnection } from "peerjs";
 
 interface InfiniteCanvasProps {
     onStrokeComplete: (stroke: Stroke) => void;
-    remoteData: PeerData | null;
+    remoteData: { data: PeerData, peerId: string } | null;
     broadcast: (data: PeerData) => void;
-    connectionCount: number;
+    connections: DataConnection[];
 }
 
 export default function InfiniteCanvas({
     onStrokeComplete,
     remoteData,
     broadcast,
-    connectionCount
+    connections
 }: InfiniteCanvasProps) {
     const [strokes, setStrokes] = useState<Stroke[]>([]);
     const [currentStroke, setCurrentStroke] = useState<Stroke | null>(null);
@@ -25,9 +26,11 @@ export default function InfiniteCanvas({
     const [remoteStroke, setRemoteStroke] = useState<Stroke | null>(null);
     const [remoteRatio, setRemoteRatio] = useState<number | null>(null);
     const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+    const [peerStates, setPeerStates] = useState<Record<string, { transform: { x: number, y: number, scale: number }, dimensions: { width: number, height: number } }>>({});
 
     const containerRef = useRef<HTMLDivElement>(null);
     const prevConnectionCount = useRef(0);
+    const connectionCount = connections.length;
 
     // Persistence
     useEffect(() => {
@@ -62,6 +65,22 @@ export default function InfiniteCanvas({
         obs.observe(containerRef.current);
         return () => obs.disconnect();
     }, []);
+
+    // Clean up disconnected peers from state
+    useEffect(() => {
+        const connectedIds = new Set(connections.map(c => c.peer));
+        setPeerStates(prev => {
+            const next = { ...prev };
+            let changed = false;
+            for (const key in next) {
+                if (!connectedIds.has(key)) {
+                    delete next[key];
+                    changed = true;
+                }
+            }
+            return changed ? next : prev;
+        });
+    }, [connections]);
 
     // Sync Everything (FULL) when connection count increases
     useEffect(() => {
@@ -106,13 +125,39 @@ export default function InfiniteCanvas({
     useEffect(() => {
         if (!remoteData) return;
 
-        if (remoteData.type === 'CLEAR') {
+        const { data, peerId } = remoteData;
+
+        if (data.type === 'SYNC_TRANSFORM') {
+            setPeerStates(prev => ({
+                ...prev,
+                [peerId]: {
+                    ...prev[peerId],
+                    transform: data.payload.transform,
+                    dimensions: prev[peerId]?.dimensions || { width: 0, height: 0 }
+                }
+            }));
+            return;
+        }
+
+        if (data.type === 'SYNC_DIMENSIONS') {
+            setPeerStates(prev => ({
+                ...prev,
+                [peerId]: {
+                    ...prev[peerId],
+                    transform: prev[peerId]?.transform || { x: 0, y: 0, scale: 1 },
+                    dimensions: data.payload.dimensions
+                }
+            }));
+            return;
+        }
+
+        if (data.type === 'CLEAR') {
             clearCanvas();
             return;
         }
 
-        if (remoteData.type === 'PAN_ZOOM') {
-            const { scaleFactor, deltaX, deltaY } = remoteData.payload;
+        if (data.type === 'PAN_ZOOM') {
+            const { scaleFactor, deltaX, deltaY } = data.payload;
             setTransform(prev => {
                 const currentScale = prev.scale || 1;
                 const newScale = Math.min(Math.max(currentScale * (scaleFactor || 1), 0.1), 5);
@@ -126,9 +171,9 @@ export default function InfiniteCanvas({
             return;
         }
 
-        if (remoteData.type !== 'STROKE') return;
+        if (data.type !== 'STROKE') return;
 
-        const payload = remoteData.payload;
+        const payload = data.payload;
         const { action, point, tool, color, ratio } = payload;
 
         if (ratio && ratio !== remoteRatio) {
@@ -386,6 +431,60 @@ export default function InfiniteCanvas({
                     {remoteStroke && (
                         <path d={renderStroke(remoteStroke)} fill={remoteStroke.color} className="opacity-90 transition-opacity" />
                     )}
+
+                    {/* Peer Viewports */}
+                    {Object.entries(peerStates).map(([id, state]) => {
+                        if (!state.dimensions || state.dimensions.width === 0) return null;
+
+                        const peerW = state.dimensions.width;
+                        const peerH = state.dimensions.height;
+                        const peerRatio = peerW / peerH;
+
+                        // Logic matching the stroke mapping (Fitting to Height)
+                        // We map the Peer's Screen Rect to the Host's Screen Rect
+                        const hostH = dimensions.height;
+                        const hostW = dimensions.width;
+
+                        // Calculate Peer's Screen Rect on Host
+                        const screenH = hostH;
+                        const screenW = hostH * peerRatio;
+                        const screenX = (hostW - screenW) / 2;
+                        const screenY = 0;
+
+                        // Convert Screen Rect to World Rect
+                        // world = (screen - tx) / scale
+                        const worldX = (screenX - transform.x) / transform.scale;
+                        const worldY = (screenY - transform.y) / transform.scale;
+                        const worldWidth = screenW / transform.scale;
+                        const worldHeight = screenH / transform.scale;
+
+                        return (
+                            <g key={id}>
+                                <rect
+                                    x={worldX}
+                                    y={worldY}
+                                    width={worldWidth}
+                                    height={worldHeight}
+                                    fill="none"
+                                    stroke="rgba(99, 102, 241, 0.4)"
+                                    strokeWidth={2 / transform.scale}
+                                    strokeDasharray={`${10 / transform.scale},${10 / transform.scale}`}
+                                    className="pointer-events-none transition-all duration-300 ease-out"
+                                />
+                                <text
+                                    x={worldX + (10 / transform.scale)}
+                                    y={worldY + (24 / transform.scale)}
+                                    fill="rgba(99, 102, 241, 0.8)"
+                                    fontSize={14 / transform.scale}
+                                    fontFamily="monospace"
+                                    fontWeight="bold"
+                                    className="select-none pointer-events-none"
+                                >
+                                    {id.slice(0, 5)}
+                                </text>
+                            </g>
+                        );
+                    })}
                 </svg>
             </div>
 

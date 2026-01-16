@@ -15,12 +15,25 @@ function cn(...inputs: (string | undefined | null | false)[]) {
 
 const COLORS = [
     { name: "Black", value: "#000000" },
-    { name: "White", value: "#49c1c3ff" },
+    { name: "White", value: "#ffffff" },
+    { name: "Gray", value: "#9ca3af" },
     { name: "Red", value: "#ef4444" },
-    { name: "Blue", value: "#3b82f6" },
-    { name: "Green", value: "#22c55e" },
-    { name: "Purple", value: "#a855f7" },
     { name: "Orange", value: "#f97316" },
+    { name: "Amber", value: "#f59e0b" },
+    { name: "Yellow", value: "#eab308" },
+    { name: "Lime", value: "#84cc16" },
+    { name: "Green", value: "#22c55e" },
+    { name: "Emerald", value: "#10b981" },
+    { name: "Teal", value: "#14b8a6" },
+    { name: "Cyan", value: "#06b6d4" },
+    { name: "Sky", value: "#0ea5e9" },
+    { name: "Blue", value: "#3b82f6" },
+    { name: "Indigo", value: "#6366f1" },
+    { name: "Violet", value: "#8b5cf6" },
+    { name: "Purple", value: "#a855f7" },
+    { name: "Fuchsia", value: "#d946ef" },
+    { name: "Pink", value: "#ec4899" },
+    { name: "Rose", value: "#f43f5e" },
 ];
 
 
@@ -46,7 +59,6 @@ function RemoteContent() {
         if (hostId && isReady) connectToHost(hostId);
     }, [hostId, isReady, connectToHost]);
 
-    // Listen for Sync Data
     useEffect(() => {
         setOnData((data: PeerData) => {
             if (data.type === 'STROKE_ADDED') {
@@ -63,6 +75,36 @@ function RemoteContent() {
             }
         });
     }, [setOnData]);
+
+    // Send Dimensions & Transform (default)
+    useEffect(() => {
+        if (!isConnected || !padRef.current) return;
+
+        const syncViewport = () => {
+            if (!padRef.current) return;
+            const { width, height } = padRef.current.getBoundingClientRect();
+
+            // Send Dimensions
+            sendData({
+                type: 'SYNC_DIMENSIONS',
+                payload: { dimensions: { width, height } }
+            });
+
+            // Send Transform (Remote is always 1:1 locally, but sending identity transform helps host logic)
+            sendData({
+                type: 'SYNC_TRANSFORM',
+                payload: { transform: { x: 0, y: 0, scale: 1 } }
+            });
+        };
+
+        const obs = new ResizeObserver(syncViewport);
+        obs.observe(padRef.current);
+
+        // Initial sync
+        syncViewport();
+
+        return () => obs.disconnect();
+    }, [isConnected, sendData]);
 
 
     // -------- INPUT HANDLING --------
