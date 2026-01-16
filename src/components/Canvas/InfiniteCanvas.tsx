@@ -466,21 +466,20 @@ export default function InfiniteCanvas({
                                     width={worldWidth}
                                     height={worldHeight}
                                     fill="none"
-                                    stroke="rgba(99, 102, 241, 0.4)"
-                                    strokeWidth={2 / transform.scale}
-                                    strokeDasharray={`${10 / transform.scale},${10 / transform.scale}`}
+                                    stroke="rgba(99, 102, 241, 0.3)"
+                                    strokeWidth={1 / transform.scale}
+                                    strokeDasharray={`${4 / transform.scale},${4 / transform.scale}`}
                                     className="pointer-events-none transition-all duration-300 ease-out"
                                 />
                                 <text
-                                    x={worldX + (10 / transform.scale)}
-                                    y={worldY + (24 / transform.scale)}
-                                    fill="rgba(99, 102, 241, 0.8)"
-                                    fontSize={14 / transform.scale}
+                                    x={worldX + (4 / transform.scale)}
+                                    y={worldY + (12 / transform.scale)}
+                                    fill="rgba(99, 102, 241, 0.5)"
+                                    fontSize={10 / transform.scale}
                                     fontFamily="monospace"
-                                    fontWeight="bold"
                                     className="select-none pointer-events-none"
                                 >
-                                    {id.slice(0, 5)}
+                                    {id.slice(0, 4)}
                                 </text>
                             </g>
                         );
