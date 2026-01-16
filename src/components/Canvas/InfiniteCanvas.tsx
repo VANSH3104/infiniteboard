@@ -4,7 +4,7 @@ import React, { useRef, useState, useEffect } from "react";
 import { getStroke } from "perfect-freehand";
 import { getSvgPathFromStroke, Stroke, Point } from "./Renderer";
 import { PeerData, usePeer } from "@/hooks/usePeer";
-import { ZoomIn, ZoomOut, Maximize, Trash2, Smartphone } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize, Trash2, Smartphone, Github } from "lucide-react";
 import { DataConnection } from "peerjs";
 
 interface InfiniteCanvasProps {
@@ -504,6 +504,16 @@ export default function InfiniteCanvas({
                 <button onClick={() => { if (confirm('Clear Canvas?')) clearCanvas() }} className="p-2 hover:bg-red-50 text-red-500 rounded-lg transition-colors border-t border-neutral-100 mt-1" title="Clear Canvas">
                     <Trash2 size={20} />
                 </button>
+                <div className="w-full h-px bg-neutral-200 my-1" />
+                <a
+                    href="https://github.com/VANSH3104"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 hover:bg-neutral-100 rounded-lg text-neutral-600 transition-colors flex justify-center"
+                    title="View GitHub Profile"
+                >
+                    <Github size={20} />
+                </a>
                 <div className="text-[10px] text-center font-mono text-neutral-400 border-t pt-1 mt-1">
                     {(transform.scale * 100).toFixed(0)}%
                 </div>
